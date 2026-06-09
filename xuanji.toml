@@ -1,0 +1,16 @@
+[llm]
+default_provider = "deepseek"
+
+[llm.providers.deepseek]
+protocol = "openai"
+model = "deepseek-chat"
+api_key = "${DEEPSEEK_API_KEY}"
+base_url = "https://api.deepseek.com/v1"
+
+[agent]
+max_loops = 20
+confirm_risky = true
+
+[[mcp_server]]
+name = "shell"
+command = "xuanji-mcp-shell"

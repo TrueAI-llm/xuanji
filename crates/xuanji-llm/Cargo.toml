@@ -1,0 +1,16 @@
+[package]
+name = "xuanji-llm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures = "0.3"
+schemars = "0.8"
+toml = "0.8"
