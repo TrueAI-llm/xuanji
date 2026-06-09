@@ -6,7 +6,7 @@
 
 **Architecture:** Rust workspace with 5 crates: `xuanji-llm` (LLM abstraction), `xuanji-plugin` (MCP client), `xuanji-agent` (ReAct loop), `xuanji-memory` (basic memory), `xuanji-cli` (binary entry). The agent loop drives everything: it sends prompts to LLM, parses tool call responses, dispatches to MCP tools or system tools, and loops until done.
 
-**Tech Stack:** Rust, tokio, reqwest, clap, serde + serde_json, serde_yml, toml, tracing, rmcp (Rust MCP client crate)
+**Tech Stack:** Rust, tokio, reqwest, clap, serde + serde_json, toml, tracing, futures
 
 **Spec:** `docs/superpowers/specs/2026-06-09-xuanji-design.md`
 
@@ -33,7 +33,7 @@ xuanji/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── client.rs               # MCP client (using rmcp)
+│   │       ├── client.rs               # MCP JSON-RPC client
 │   │       ├── registry.rs             # ToolRegistry
 │   │       ├── process.rs              # MCP server process manager
 │   │       ├── types.rs                # McpServerConfig, etc.
@@ -70,8 +70,8 @@ xuanji/
 │       └── src/
 │           └── main.rs                 # Shell MCP server
 ├── xuanji.toml                         # example config
-└── tests/
-    └── integration/
+└── crates/xuanji-cli/
+    └── tests/
         └── agent_e2e.rs                # end-to-end agent test
 ```
 
@@ -177,7 +177,8 @@ anyhow.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
-rmcp = "0.1"
+xuanji-llm = { path = "../xuanji-llm" }
+futures = "0.3"
 ```
 
 - [ ] **Step 5: Create xuanji-plugin/src/lib.rs**
@@ -245,6 +246,7 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
+xuanji-llm = { path = "../xuanji-llm" }
 ```
 
 - [ ] **Step 9: Create xuanji-memory/src/lib.rs**
@@ -1058,7 +1060,10 @@ impl LlmProvider for AnthropicAdapter {
         temperature: Option<f32>,
         max_tokens: Option<u32>,
     ) -> Result<LlmResponse, LlmError> {
-        let url = format!("{}/v1/messages", self.base_url);
+        // Anthropic API path; base_url should be "https://api.anthropic.com"
+        // Strip trailing /v1 if user accidentally included it in base_url
+        let base = self.base_url.trim_end_matches("/v1").trim_end_matches('/');
+        let url = format!("{}/v1/messages", base);
         let (system, body) = self.build_request_body(&messages, &tools, temperature, max_tokens);
 
         let mut final_body = body;
@@ -1166,11 +1171,8 @@ pub enum PluginError {
 ```rust
 use crate::error::PluginError;
 use crate::types::McpServerConfig;
-use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
-use std::sync::Arc;
 
 pub struct McpProcess {
     config: McpServerConfig,
@@ -1212,34 +1214,6 @@ impl McpProcess {
         tracing::info!("Started MCP server '{}': {}", self.config.name, self.config.command);
         self.child = Some(child);
         Ok(())
-    }
-
-    /// Get stdin and stdout for communication
-    pub fn get_pipes(
-        &mut self,
-    ) -> Result<(&mut tokio::process::ChildStdin, &mut tokio::process::ChildStdout), PluginError> {
-        let child = self.child.as_mut().ok_or_else(|| {
-            PluginError::Process(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "MCP server not started",
-            ))
-        })?;
-
-        let stdin = child.stdin.as_mut().ok_or_else(|| {
-            PluginError::Process(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "stdin not available",
-            ))
-        })?;
-
-        let stdout = child.stdout.as_mut().ok_or_else(|| {
-            PluginError::Process(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "stdout not available",
-            ))
-        })?;
-
-        Ok((stdin, stdout))
     }
 
     /// Kill the MCP server process
@@ -1374,10 +1348,9 @@ impl McpClient {
             "params": params,
         });
 
-        let (stdin, stdout) = self.process.get_pipes()?;
         let request_str = format!("{}\n", serde_json::to_string(&request)?);
 
-        // Use tokio async I/O
+        // Take stdin/stdout from child process
         let stdin = self.process.child.as_mut().unwrap().stdin.take().unwrap();
         let stdout = self.process.child.as_mut().unwrap().stdout.take().unwrap();
 
@@ -1573,11 +1546,7 @@ impl ToolRegistry {
 }
 ```
 
-Add `xuanji-llm` dependency to `xuanji-plugin/Cargo.toml`:
-
-```toml
-xuanji-llm = { path = "../xuanji-llm" }
-```
+Note: `xuanji-llm` dependency was already added to `xuanji-plugin/Cargo.toml` in Task 1 Step 4.
 
 - [ ] **Step 6: Verify all compiles**
 
@@ -1897,7 +1866,7 @@ fn test_checker() -> RiskChecker {
     let config = AgentConfig {
         risky_patterns: vec![
             RiskyPattern { tool: "shell.run".into(), pattern: "rm\\s+-rf".into() },
-            RiskyPattern { tool: "shell.run".pattern: "DROP\\s+".into() },
+            RiskyPattern { tool: "shell.run".into(), pattern: "DROP\\s+".into() },
         ],
         ..Default::default()
     };
@@ -2045,15 +2014,17 @@ impl ShortTermMemory {
             return;
         }
 
-        // Always keep first message (system prompt) and first user message
+        // Always keep: first 2 messages (system + first user) + last max_turns messages
         let preserved_front = 2;
-        let keep_from = self.messages.len().saturating_sub(self.max_turns);
+        let cutoff_start = preserved_front;
+        let cutoff_end = self.messages.len().saturating_sub(self.max_turns);
 
-        let mut new_messages = Vec::with_capacity(preserved_front + self.max_turns);
-        new_messages.extend(self.messages.drain(0..preserved_front));
-        new_messages.extend(self.messages.drain(keep_from.saturating_sub(preserved_front)..));
+        if cutoff_end <= cutoff_start {
+            return;
+        }
 
-        self.messages = new_messages;
+        // Remove messages between preserved front and the tail we want to keep
+        self.messages.drain(cutoff_start..cutoff_end);
     }
 }
 ```
@@ -2127,12 +2098,66 @@ impl WorkingMemory {
 }
 ```
 
-- [ ] **Step 4: Verify all compiles**
+- [ ] **Step 4: Write failing test for short-term memory compression**
+
+Create `crates/xuanji-memory/tests/short_term_test.rs`:
+
+```rust
+use xuanji_llm::Message;
+use xuanji_memory::short_term::ShortTermMemory;
+use xuanji_memory::types::MemoryConfig;
+
+#[test]
+fn test_compression_preserves_system_and_first_user() {
+    let config = MemoryConfig { max_history: 100, max_context_turns: 3 };
+    let mut mem = ShortTermMemory::new(&config);
+
+    // Push system + user (the preserved front)
+    mem.push(Message::System { content: "system prompt".into() });
+    mem.push(Message::User { content: "first user message".into() });
+
+    // Push 5 more messages (exceeds max_context_turns=3)
+    for i in 0..5 {
+        mem.push(Message::Assistant { content: format!("assistant {}", i) });
+        mem.push(Message::User { content: format!("user {}", i + 1) });
+    }
+
+    let msgs = mem.messages();
+
+    // System and first user preserved
+    assert!(matches!(&msgs[0], Message::System { content } if content == "system prompt"));
+    assert!(matches!(&msgs[1], Message::User { content } if content == "first user message"));
+
+    // Should have at most 2 (front) + 3 (max_turns) = 5 messages
+    assert!(msgs.len() <= 5, "Expected <= 5 messages, got {}", msgs.len());
+}
+
+#[test]
+fn test_no_compression_under_limit() {
+    let config = MemoryConfig { max_history: 100, max_context_turns: 20 };
+    let mut mem = ShortTermMemory::new(&config);
+
+    mem.push(Message::System { content: "system".into() });
+    mem.push(Message::User { content: "hello".into() });
+    mem.push(Message::Assistant { content: "hi".into() });
+
+    assert_eq!(mem.messages().len(), 3);
+}
+```
+
+- [ ] **Step 5: Run test to verify it fails**
+
+Run: `cargo test -p xuanji-memory --test short_term_test`
+Expected: FAIL - xuanji_llm not found (dependency not yet added... wait, we added it in Task 1 Step 8 fix)
+
+Actually, this test depends on xuanji-llm which we added in the memory Cargo.toml fix. It should compile but the test logic may fail initially. Run the test anyway.
+
+- [ ] **Step 6: Verify all compiles**
 
 Run: `cargo build -p xuanji-memory`
 Expected: SUCCESS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A
@@ -2302,7 +2327,9 @@ impl Agent {
                     // Push assistant tool calls to history
                     short_term.push(Message::AssistantToolCalls { calls: calls.clone() });
 
-                    // Execute all tool calls (collect results)
+                    // Execute all tool calls sequentially
+                    // TODO: Parallel execution requires restructuring ToolRegistry
+                    // to use Arc<Mutex<McpClient>> per server
                     let mut results = Vec::new();
                     for call in &calls {
                         let result = self.execute_tool(call).await?;
@@ -2581,6 +2608,63 @@ pub async fn run_agent(
 
     Ok(result)
 }
+
+/// Run interactive multi-turn chat
+pub async fn run_chat(
+    provider_name: &str,
+    provider_config: &ProviderConfig,
+    agent_config: &AgentConfig,
+    mcp_servers: &[McpServerConfig],
+) -> Result<()> {
+    use std::io::{self, BufRead, Write};
+
+    // Create LLM provider
+    let provider: Box<dyn LlmProvider> = match provider_config.protocol {
+        Protocol::OpenAI => Box::new(OpenAiAdapter::new(
+            provider_name.to_string(),
+            provider_config.clone(),
+        )?),
+        Protocol::Anthropic => Box::new(AnthropicAdapter::new(
+            provider_name.to_string(),
+            provider_config.clone(),
+        )?),
+        Protocol::Gemini => anyhow::bail!("Gemini protocol not yet implemented"),
+    };
+
+    // Create tool registry
+    let mut registry = ToolRegistry::new();
+    for server_config in mcp_servers {
+        registry.register_server(server_config.clone());
+    }
+    registry.load_all().await?;
+
+    println!("xuanji chat (type 'exit' to quit)\n");
+
+    let stdin = io::stdin();
+    let mut agent = Agent::new(provider, registry, agent_config.clone());
+
+    loop {
+        print!("> ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        stdin.lock().read_line(&mut input)?;
+        let input = input.trim();
+
+        if input.is_empty() {
+            continue;
+        }
+        if input == "exit" || input == "quit" {
+            break;
+        }
+
+        match agent.run(input.to_string()).await {
+            Ok(result) => println!("\n{}\n", result),
+            Err(e) => println!("\nError: {}\n", e),
+        }
+    }
+
+    Ok(())
+}
 ```
 
 - [ ] **Step 4: Create commands/mcp.rs**
@@ -2693,8 +2777,22 @@ async fn main() -> Result<()> {
 
         // Chat mode: xuanji chat
         (None, Some(Commands::Chat)) => {
-            println!("xuanji chat mode - not yet implemented in MVP");
-            // TODO: interactive REPL
+            let (provider_name, provider_config) = config
+                .llm
+                .providers
+                .get(&config.llm.default)
+                .map(|c| (config.llm.default.clone(), c.clone()))
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Default provider '{}' not found in config. Run 'xuanji config-init' to create a config.",
+                    config.llm.default
+                ))?;
+
+            commands::agent::run_chat(
+                &provider_name,
+                &provider_config,
+                &config.agent,
+                &config.mcp_servers,
+            ).await?;
         }
 
         // MCP list
@@ -2785,11 +2883,11 @@ git commit -m "feat(cli): implement CLI with agent mode, MCP list, and config ma
 ### Task 11: End-to-End Integration Test
 
 **Files:**
-- Create: `tests/integration/agent_e2e.rs`
+- Create: `crates/xuanji-cli/tests/agent_e2e.rs`
 
 - [ ] **Step 1: Write E2E test that runs agent with shell MCP server**
 
-Create `tests/integration/agent_e2e.rs`:
+Create `crates/xuanji-cli/tests/agent_e2e.rs`:
 
 ```rust
 use std::collections::HashMap;
