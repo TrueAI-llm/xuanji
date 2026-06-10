@@ -200,16 +200,6 @@ pub mod main_fns {
     }
 }
 
-/// RAII guard that restores terminal state on drop.
-/// Ensures terminal is always restored even on panic or early return.
-struct TerminalGuard;
-
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        let _ = crossterm::terminal::disable_raw_mode();
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing
@@ -219,9 +209,6 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-
-    // Guard terminal state — restores on any exit path
-    let _terminal_guard = TerminalGuard;
 
     let cli = Cli::parse();
     let config = config::XuanjiConfig::load().unwrap_or_else(|e| {

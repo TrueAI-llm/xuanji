@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::io::{self, BufRead, Write};
-use termimad::MadSkin;
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use xuanji_agent::types::AgentConfig;
 use xuanji_llm::anthropic::AnthropicProvider;
 use xuanji_llm::openai::OpenAIProvider;
@@ -11,18 +11,118 @@ use xuanji_plugin::types::McpServerConfig;
 use xuanji_plugin::ToolRegistry;
 use xuanji_agent::Agent;
 
+// ANSI escape codes
+const BOLD: &str = "\x1b[1m";
+const DIM: &str = "\x1b[2m";
+const ITALIC: &str = "\x1b[3m";
+const UNDERLINE: &str = "\x1b[4m";
+const CYAN: &str = "\x1b[36m";
+const YELLOW: &str = "\x1b[33m";
+const BLUE: &str = "\x1b[34m";
+const GREEN: &str = "\x1b[32m";
+const RESET: &str = "\x1b[0m";
+
 /// Render markdown text to the terminal with colors and formatting.
-/// Renders to an in-memory buffer first to avoid crossterm terminal state issues.
+/// Uses pulldown-cmark for parsing and direct ANSI codes for styling.
+/// No terminal state manipulation — safe for all terminals.
 pub fn render_markdown(text: &str) {
-    let skin = MadSkin::default();
-    let mut buf = Vec::new();
-    if skin.write_text_on(&mut buf, text).is_ok() {
-        let output = String::from_utf8_lossy(&buf);
-        print!("{}", output);
-    } else {
-        // Fallback to plain text
-        println!("{}", text);
+    let parser = Parser::new(text);
+    let mut in_code_block = false;
+
+    for event in parser {
+        match event {
+            // Headings
+            Event::Start(Tag::Heading { level, .. }) => {
+                match level {
+                    HeadingLevel::H1 => print!("\n{BOLD}{CYAN}"),
+                    HeadingLevel::H2 => print!("\n{BOLD}{YELLOW}"),
+                    _ => print!("\n{BOLD}"),
+                }
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                print!("{RESET}\n");
+            }
+
+            // Code blocks
+            Event::Start(Tag::CodeBlock(_)) => {
+                in_code_block = true;
+                print!("{DIM}");
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                in_code_block = false;
+                print!("{RESET}");
+            }
+
+            // Inline code
+            Event::Code(code) => {
+                print!("{YELLOW}{}{RESET}", code);
+            }
+
+            // Bold
+            Event::Start(Tag::Strong) => print!("{BOLD}"),
+            Event::End(TagEnd::Strong) => print!("{RESET}"),
+
+            // Italic
+            Event::Start(Tag::Emphasis) => print!("{ITALIC}"),
+            Event::End(TagEnd::Emphasis) => print!("{RESET}"),
+
+            // Links
+            Event::Start(Tag::Link { .. }) => print!("{UNDERLINE}{BLUE}"),
+            Event::End(TagEnd::Link) => print!("{RESET}"),
+
+            // Lists
+            Event::Start(Tag::List(None)) => {}
+            Event::Start(Tag::List(Some(_))) => {}
+            Event::End(TagEnd::List(false)) => {}
+            Event::End(TagEnd::List(true)) => {}
+            Event::Start(Tag::Item) => print!("  {GREEN}•{RESET} "),
+            Event::End(TagEnd::Item) => print!("\n"),
+
+            // Paragraphs
+            Event::Start(Tag::Paragraph) => {}
+            Event::End(TagEnd::Paragraph) => print!("\n"),
+
+            // Block quotes
+            Event::Start(Tag::BlockQuote(_)) => print!("{DIM}│ "),
+            Event::End(TagEnd::BlockQuote(_)) => print!("{RESET}\n"),
+
+            // Horizontal rule
+            Event::Rule => {
+                print!("{DIM}{}\n{RESET}", "─".repeat(60));
+            }
+
+            // Soft/hard breaks
+            Event::SoftBreak => print!(" "),
+            Event::HardBreak => print!("\n"),
+
+            // Tables — render cells with separators
+            Event::Start(Tag::Table(_)) => {}
+            Event::End(TagEnd::Table) => { print!("\n"); }
+            Event::Start(Tag::TableHead) => print!("{BOLD}"),
+            Event::End(TagEnd::TableHead) => print!("{RESET}\n"),
+            Event::Start(Tag::TableRow) => {}
+            Event::End(TagEnd::TableRow) => {}
+            Event::Start(Tag::TableCell) => {}
+            Event::End(TagEnd::TableCell) => print!(" │ "),
+
+            // Plain text
+            Event::Text(text) => {
+                if in_code_block {
+                    // Preserve newlines in code blocks
+                    print!("{}", text);
+                } else {
+                    print!("{}", text);
+                }
+            }
+
+            // HTML and other events — pass through
+            Event::Html(html) => print!("{}", html),
+            Event::InlineHtml(html) => print!("{}", html),
+            _ => {}
+        }
     }
+    // Flush stdout
+    let _ = io::stdout().flush();
 }
 
 /// Run a single-shot agent task.
