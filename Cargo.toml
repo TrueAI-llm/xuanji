@@ -8,6 +8,7 @@ members = [
     "crates/xuanji-cli",
     "plugins/xuanji-mcp-shell",
     "crates/xuanji-core",
+    "crates/xuanji-trigger",
 ]
 
 [workspace.package]

@@ -1,0 +1,12 @@
+name: daily-report
+description: Daily summary report (weekdays at 9am)
+
+triggers:
+  - type: cron
+    schedule: "0 9 * * 1-5"
+
+tasks:
+  report:
+    tool: llm.ask
+    arguments:
+      prompt: "Generate a daily summary report. Scheduled time: ${{ trigger.scheduled_time }}"

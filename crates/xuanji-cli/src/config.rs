@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use xuanji_agent::types::AgentConfig;
 use xuanji_llm::LlmConfig;
 use xuanji_plugin::types::McpServerConfig;
+use xuanji_trigger::TriggerConfig;
 
 fn default_llm_config() -> LlmConfig {
     LlmConfig {
@@ -21,6 +22,8 @@ pub struct XuanjiConfig {
     pub agent: AgentConfig,
     #[serde(default, rename = "mcp_server")]
     pub mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
+    pub trigger: TriggerConfig,
 }
 
 impl Default for XuanjiConfig {
@@ -32,6 +35,7 @@ impl Default for XuanjiConfig {
             },
             agent: AgentConfig::default(),
             mcp_servers: Vec::new(),
+            trigger: TriggerConfig::default(),
         }
     }
 }
@@ -142,6 +146,7 @@ impl XuanjiConfig {
         if !other.mcp_servers.is_empty() {
             self.mcp_servers = other.mcp_servers;
         }
+        self.trigger = other.trigger;
         self
     }
 }

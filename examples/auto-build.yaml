@@ -1,0 +1,14 @@
+name: auto-build
+description: Auto rebuild on source changes
+
+triggers:
+  - type: file-watcher
+    paths: ["src/**", "Cargo.toml"]
+    events: [modified, created]
+
+tasks:
+  test:
+    tool: shell.run
+    arguments:
+      command: "echo 'Build triggered by change to ${{ trigger.path }}'"
+    timeout: 60s

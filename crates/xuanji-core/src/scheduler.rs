@@ -11,11 +11,22 @@ use xuanji_plugin::ToolRegistry;
 /// DAG workflow execution engine.
 pub struct DagScheduler {
     registry: Arc<ToolRegistry>,
+    daemon_mode: bool,
 }
 
 impl DagScheduler {
     pub fn new(registry: Arc<ToolRegistry>) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            daemon_mode: false,
+        }
+    }
+
+    pub fn new_daemon(registry: Arc<ToolRegistry>) -> Self {
+        Self {
+            registry,
+            daemon_mode: true,
+        }
     }
 
     /// Execute a workflow with the given inputs.
@@ -23,6 +34,16 @@ impl DagScheduler {
         &self,
         workflow: &WorkflowDef,
         inputs: &WorkflowInputs,
+    ) -> Result<WorkflowResult, CoreError> {
+        self.execute_with_trigger(workflow, inputs, None).await
+    }
+
+    /// Execute a workflow with trigger context for template variables.
+    pub async fn execute_with_trigger(
+        &self,
+        workflow: &WorkflowDef,
+        inputs: &WorkflowInputs,
+        trigger: Option<serde_json::Value>,
     ) -> Result<WorkflowResult, CoreError> {
         // 1. Build and validate DAG
         let (graph, name_to_idx) = build_dag(workflow)?;
@@ -40,6 +61,7 @@ impl DagScheduler {
             inputs: inputs.clone(),
             tasks: HashMap::new(),
             env: std::env::vars().collect(),
+            trigger,
         };
 
         // 4. Main scheduling loop
@@ -100,11 +122,14 @@ impl DagScheduler {
                 let task_def = workflow.tasks[&name].clone();
                 let registry = self.registry.clone();
                 let ctx_clone = ctx.clone();
+                let daemon_mode = self.daemon_mode;
 
                 statuses.insert(name.clone(), TaskStatus::Running);
 
                 join_set.spawn(async move {
-                    let result = execute_single_task(&name, &task_def, &ctx_clone, &registry).await;
+                    let result =
+                        execute_single_task(&name, &task_def, &ctx_clone, &registry, daemon_mode)
+                            .await;
                     (name, result)
                 });
             }
@@ -151,24 +176,36 @@ async fn execute_single_task(
     task_def: &TaskDef,
     ctx: &TemplateContext,
     registry: &Arc<ToolRegistry>,
+    daemon_mode: bool,
 ) -> Result<TaskResult, CoreError> {
     // 1. Resolve template variables in arguments
     let resolved_args = resolve_templates(&task_def.arguments, ctx)?;
 
     // 2. Confirm if required
     if task_def.confirm {
-        println!("⚠ Task '{}' requires confirmation. Execute? [y/N] ", name);
-        let mut input = String::new();
-        std::io::stdin()
-            .read_line(&mut input)
-            .map_err(|e| CoreError::Other(anyhow::anyhow!("stdin read error: {}", e)))?;
-        if !input.trim().eq_ignore_ascii_case("y") {
-            return Err(CoreError::UserCancelled);
+        if daemon_mode {
+            tracing::warn!(
+                "Task '{}' requires confirmation, auto-approved in daemon mode",
+                name
+            );
+        } else {
+            println!(
+                "⚠ Task '{}' requires confirmation. Execute? [y/N] ",
+                name
+            );
+            let mut input = String::new();
+            std::io::stdin()
+                .read_line(&mut input)
+                .map_err(|e| CoreError::Other(anyhow::anyhow!("stdin read error: {}", e)))?;
+            if !input.trim().eq_ignore_ascii_case("y") {
+                return Err(CoreError::UserCancelled);
+            }
         }
     }
 
     // 3. Parse timeout
-    let timeout = task_def.timeout
+    let timeout = task_def
+        .timeout
         .as_deref()
         .map(parse_duration)
         .transpose()?
@@ -186,7 +223,12 @@ async fn execute_single_task(
     let mut last_error = None;
     for attempt in 0..max_attempts {
         if attempt > 0 {
-            tracing::info!("Retrying task '{}' (attempt {}/{})", name, attempt + 1, max_attempts);
+            tracing::info!(
+                "Retrying task '{}' (attempt {}/{})",
+                name,
+                attempt + 1,
+                max_attempts
+            );
             tokio::time::sleep(retry_delay).await;
         }
 
@@ -202,7 +244,11 @@ async fn execute_single_task(
                     .as_array()
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|c| c.get("text").and_then(|t| t.as_str()).map(String::from))
+                            .filter_map(|c| {
+                                c.get("text")
+                                    .and_then(|t| t.as_str())
+                                    .map(String::from)
+                            })
                             .collect::<Vec<_>>()
                             .join("\n")
                     })

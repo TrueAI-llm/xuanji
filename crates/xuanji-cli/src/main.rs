@@ -38,6 +38,35 @@ enum Commands {
         #[arg(long, value_parser = parse_key_value)]
         input: Vec<String>,
     },
+
+    /// Daemon management
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+
+    /// Internal: run the daemon process (hidden)
+    #[command(hide = true)]
+    #[command(name = "_daemon_run")]
+    DaemonRun {
+        /// PID file path
+        #[arg(long)]
+        pid_file: String,
+
+        /// Log file path
+        #[arg(long)]
+        log_file: String,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum DaemonAction {
+    /// Start the daemon process
+    Start,
+    /// Check daemon status
+    Status,
+    /// Stop the daemon process
+    Stop,
 }
 
 #[derive(clap::Subcommand)]
@@ -108,6 +137,37 @@ fn parse_key_value(s: &str) -> Result<String, String> {
     }
 }
 
+/// Functions accessible from command modules.
+pub mod main_fns {
+    use anyhow::Result;
+    use xuanji_llm::ProviderConfig;
+
+    pub fn get_default_provider(
+        config: &super::config::XuanjiConfig,
+    ) -> Result<(String, ProviderConfig)> {
+        let provider_name = config
+            .llm
+            .default_provider
+            .as_deref()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No default_provider set. Run 'xuanji config-init' to create a config."
+                )
+            })?;
+
+        let provider_config = config
+            .llm
+            .providers
+            .get(provider_name)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!("Provider '{}' not found in config.", provider_name)
+            })?;
+
+        Ok((provider_name.to_string(), provider_config))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing
@@ -127,7 +187,7 @@ async fn main() -> Result<()> {
     match (cli.prompt, cli.command) {
         // Agent mode: xuanji "task description"
         (Some(prompt), None) => {
-            let (_, provider_config) = get_default_provider(&config)?;
+            let (_, provider_config) = main_fns::get_default_provider(&config)?;
 
             let result = commands::agent::run_agent(
                 &prompt,
@@ -142,14 +202,9 @@ async fn main() -> Result<()> {
 
         // Chat mode: xuanji chat
         (None, Some(Commands::Chat)) => {
-            let (_, provider_config) = get_default_provider(&config)?;
+            let (_, provider_config) = main_fns::get_default_provider(&config)?;
 
-            commands::agent::run_chat(
-                &provider_config,
-                &config.agent,
-                &config.mcp_servers,
-            )
-            .await?;
+            commands::agent::run_chat(&provider_config, &config.agent, &config.mcp_servers).await?;
         }
 
         // MCP list
@@ -158,23 +213,45 @@ async fn main() -> Result<()> {
         }
 
         // MCP add
-        (None, Some(Commands::Mcp {
-            action: McpAction::Add { name, command, args, env, global },
-        })) => {
+        (
+            None,
+            Some(Commands::Mcp {
+                action: McpAction::Add { name, command, args, env, global },
+            }),
+        ) => {
             commands::mcp::add_server(&name, &command, &args, &env, global)?;
         }
 
         // MCP install
-        (None, Some(Commands::Mcp {
-            action: McpAction::Install { package, name, r#type, env, global },
-        })) => {
-            commands::mcp::install_server(&package, name.as_deref(), r#type.as_deref(), &env, global)?;
+        (
+            None,
+            Some(Commands::Mcp {
+                action:
+                    McpAction::Install {
+                        package,
+                        name,
+                        r#type,
+                        env,
+                        global,
+                    },
+            }),
+        ) => {
+            commands::mcp::install_server(
+                &package,
+                name.as_deref(),
+                r#type.as_deref(),
+                &env,
+                global,
+            )?;
         }
 
         // MCP remove
-        (None, Some(Commands::Mcp {
-            action: McpAction::Remove { name, global },
-        })) => {
+        (
+            None,
+            Some(Commands::Mcp {
+                action: McpAction::Remove { name, global },
+            }),
+        ) => {
             commands::mcp::remove_server(&name, global)?;
         }
 
@@ -203,7 +280,7 @@ command = "xuanji-mcp-shell"
 
         // Run workflow: xuanji run <workflow.yaml>
         (None, Some(Commands::Run { workflow, input })) => {
-            let (_, provider_config) = get_default_provider(&config)?;
+            let (_, provider_config) = main_fns::get_default_provider(&config)?;
             commands::workflow::run_workflow(
                 &workflow,
                 &input,
@@ -213,6 +290,29 @@ command = "xuanji-mcp-shell"
             .await?;
         }
 
+        // Daemon start
+        (None, Some(Commands::Daemon { action: DaemonAction::Start })) => {
+            commands::daemon::start_daemon()?;
+        }
+
+        // Daemon status
+        (None, Some(Commands::Daemon { action: DaemonAction::Status })) => {
+            commands::daemon::status_daemon()?;
+        }
+
+        // Daemon stop
+        (None, Some(Commands::Daemon { action: DaemonAction::Stop })) => {
+            commands::daemon::stop_daemon()?;
+        }
+
+        // Internal: daemon run
+        (
+            None,
+            Some(Commands::DaemonRun { pid_file, log_file }),
+        ) => {
+            commands::daemon::run_daemon(&pid_file, &log_file).await?;
+        }
+
         // No args - show help
         _ => {
             Cli::parse_from(["xuanji", "--help"]);
@@ -220,21 +320,4 @@ command = "xuanji-mcp-shell"
     }
 
     Ok(())
-}
-
-fn get_default_provider(config: &config::XuanjiConfig) -> Result<(String, xuanji_llm::ProviderConfig)> {
-    let provider_name = config
-        .llm
-        .default_provider
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("No default_provider set. Run 'xuanji config-init' to create a config."))?;
-
-    let provider_config = config
-        .llm
-        .providers
-        .get(provider_name)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("Provider '{}' not found in config.", provider_name))?;
-
-    Ok((provider_name.to_string(), provider_config))
 }

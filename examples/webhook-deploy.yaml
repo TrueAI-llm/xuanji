@@ -1,0 +1,22 @@
+name: webhook-deploy
+description: Deploy triggered by webhook
+
+inputs:
+  environment:
+    type: string
+    default: staging
+
+triggers:
+  - type: webhook
+    path: "/deploy"
+
+tasks:
+  validate:
+    tool: llm.ask
+    arguments:
+      prompt: "Validate this deploy request: ${{ trigger.body }}"
+  deploy:
+    tool: shell.run
+    arguments:
+      command: "echo 'Deploying to ${{ inputs.environment }} via webhook ${{ trigger.path }}'"
+    depends_on: [validate]

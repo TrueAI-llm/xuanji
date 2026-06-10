@@ -1,16 +1,32 @@
 [llm]
-default_provider = "deepseek"
+default_provider = "zhipu"
 
-[llm.providers.deepseek]
-protocol = "openai"
-model = "deepseek-chat"
-api_key = "${DEEPSEEK_API_KEY}"
-base_url = "https://api.deepseek.com/v1"
+[llm.providers.zhipu]
+protocol = "anthropic"
+model = "glm-5.1"
+api_key = "sk-1234"
+base_url = "http://192.168.8.2:4000"
 
 [agent]
-max_loops = 20
+max_loops = 10
+step_timeout = "60s"
 confirm_risky = true
+risky_patterns = []
+text_tool_mode = false
 
 [[mcp_server]]
 name = "shell"
-command = "xuanji-mcp-shell"
+command = "target/debug/xuanji-mcp-shell"
+
+[[mcp_server]]
+name = "akshare-one-mcp"
+command = "uvx"
+args = ["akshare-one-mcp"]
+
+[[mcp_server]]
+name = "playwright"
+command = "npx"
+args = [
+    "-y",
+    "@playwright/mcp",
+]

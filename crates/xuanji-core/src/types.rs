@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Raw trigger definition parsed from workflow YAML.
+/// Interpretation is done by the xuanji-trigger crate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerDef {
+    #[serde(rename = "type")]
+    pub trigger_type: String,
+    #[serde(flatten)]
+    pub config: serde_json::Value,
+}
+
 /// Top-level workflow definition parsed from YAML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDef {
@@ -9,6 +19,8 @@ pub struct WorkflowDef {
     pub description: String,
     #[serde(default)]
     pub inputs: HashMap<String, InputDef>,
+    #[serde(default)]
+    pub triggers: Vec<TriggerDef>,
     pub tasks: HashMap<String, TaskDef>,
 }
 

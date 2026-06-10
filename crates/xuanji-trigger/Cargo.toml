@@ -1,0 +1,25 @@
+[package]
+name = "xuanji-trigger"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+notify = "8"
+cron = "0.15"
+chrono = { version = "0.4", features = ["serde"] }
+axum = "0.8"
+dirs = "6"
+xuanji-core = { path = "../xuanji-core" }
+xuanji-llm = { path = "../xuanji-llm" }
+xuanji-plugin = { path = "../xuanji-plugin" }
+
+[dev-dependencies]
+tower = "0.5"
+http-body-util = "0.1"

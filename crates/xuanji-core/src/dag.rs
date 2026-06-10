@@ -114,6 +114,7 @@ mod tests {
             name: "test".to_string(),
             description: String::new(),
             inputs: HashMap::new(),
+            triggers: Vec::new(),
             tasks: tasks.into_iter().map(|(name, deps)| {
                 (name.to_string(), TaskDef {
                     tool: "shell.run".to_string(),

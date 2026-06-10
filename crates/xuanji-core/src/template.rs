@@ -9,6 +9,7 @@ pub struct TemplateContext {
     pub inputs: HashMap<String, serde_json::Value>,
     pub tasks: HashMap<String, TaskResult>,
     pub env: HashMap<String, String>,
+    pub trigger: Option<serde_json::Value>,
 }
 
 /// Resolve all `${{ expr }}` template variables in a JSON value.
@@ -110,6 +111,18 @@ fn resolve_path(path: &str, ctx: &TemplateContext) -> Result<serde_json::Value, 
                 .get(*key)
                 .map(|v| serde_json::Value::String(v.clone()))
                 .ok_or_else(|| CoreError::Template(format!("env var '{}' not found", key)))
+        }
+        Some(&"trigger") => {
+            let trigger = ctx.trigger.as_ref().ok_or_else(|| {
+                CoreError::Template("trigger context not available".into())
+            })?;
+            let key = parts.get(1).ok_or_else(|| {
+                CoreError::Template(format!("invalid template path: {}", path))
+            })?;
+            trigger
+                .get(*key)
+                .cloned()
+                .ok_or_else(|| CoreError::Template(format!("trigger field '{}' not found", key)))
         }
         _ => Err(CoreError::Template(format!(
             "unknown template variable namespace in: {}",
@@ -248,5 +261,36 @@ mod tests {
     fn test_evaluate_when_false() {
         let ctx = make_ctx();
         assert!(!evaluate_when("false", &ctx).unwrap());
+    }
+
+    #[test]
+    fn test_trigger_path() {
+        let mut ctx = make_ctx();
+        ctx.trigger = Some(serde_json::json!({
+            "path": "src/main.rs",
+            "event": "modified"
+        }));
+        let val = serde_json::json!("File changed: ${{ trigger.path }}");
+        let resolved = resolve_templates(&val, &ctx).unwrap();
+        assert_eq!(resolved, serde_json::json!("File changed: src/main.rs"));
+    }
+
+    #[test]
+    fn test_trigger_whole_value() {
+        let mut ctx = make_ctx();
+        ctx.trigger = Some(serde_json::json!({
+            "scheduled_time": "2026-06-10T09:00:00+08:00"
+        }));
+        let val = serde_json::json!("${{ trigger.scheduled_time }}");
+        let resolved = resolve_templates(&val, &ctx).unwrap();
+        assert_eq!(resolved, serde_json::json!("2026-06-10T09:00:00+08:00"));
+    }
+
+    #[test]
+    fn test_trigger_missing_context() {
+        let ctx = make_ctx();
+        let val = serde_json::json!("${{ trigger.path }}");
+        let result = resolve_templates(&val, &ctx);
+        assert!(result.is_err());
     }
 }
