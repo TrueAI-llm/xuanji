@@ -1,0 +1,23 @@
+name: deploy
+description: Build, test, and deploy with template variables
+
+inputs:
+  environment:
+    type: string
+    default: staging
+
+tasks:
+  build:
+    tool: shell.run
+    arguments:
+      command: "echo 'Building for ${{ inputs.environment }}...' && sleep 1 && echo 'Build complete!'"
+  test:
+    tool: shell.run
+    arguments:
+      command: "echo 'Running tests...' && sleep 1 && echo 'Tests passed!'"
+    depends_on: [build]
+  deploy:
+    tool: shell.run
+    arguments:
+      command: "echo 'Deploying to ${{ inputs.environment }}...' && echo 'Deploy done!'"
+    depends_on: [test]

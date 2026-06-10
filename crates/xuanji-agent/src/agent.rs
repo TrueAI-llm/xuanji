@@ -269,19 +269,7 @@ impl Agent {
             tracing::warn!("Risky tool call detected: {}", call.name);
         }
 
-        // Check if it's a system tool
-        if let Some(entry) = self.registry.get_tool(&call.name) {
-            if matches!(entry.source, xuanji_plugin::ToolSource::System { .. }) {
-                return ToolResult {
-                    tool_call_id: call.id.clone(),
-                    tool_name: call.name.clone(),
-                    result: "System tool not yet implemented in MVP".into(),
-                    success: false,
-                };
-            }
-        }
-
-        // Execute via MCP
+        // Execute via MCP or system tool
         match self.registry.call_tool(&call.name, call.arguments.clone()).await {
             Ok(mcp_result) => {
                 let text = mcp_result

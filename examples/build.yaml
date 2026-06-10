@@ -1,0 +1,13 @@
+name: build-and-test
+description: Build and test a Rust project
+
+tasks:
+  test:
+    tool: shell.run
+    arguments:
+      command: "echo 'Running tests...' && sleep 1 && echo 'All tests passed!'"
+  build:
+    tool: shell.run
+    arguments:
+      command: "echo 'Building project...' && sleep 1 && echo 'Build complete!'"
+    depends_on: [test]

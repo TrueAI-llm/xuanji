@@ -1,0 +1,17 @@
+[package]
+name = "xuanji-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yml = "0.0.12"
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+petgraph = "0.7"
+regex = "1"
+xuanji-llm = { path = "../xuanji-llm" }
+xuanji-plugin = { path = "../xuanji-plugin" }

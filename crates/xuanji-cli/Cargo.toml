@@ -22,3 +22,4 @@ xuanji-llm = { path = "../xuanji-llm" }
 xuanji-plugin = { path = "../xuanji-plugin" }
 xuanji-agent = { path = "../xuanji-agent" }
 xuanji-memory = { path = "../xuanji-memory" }
+xuanji-core = { path = "../xuanji-core" }

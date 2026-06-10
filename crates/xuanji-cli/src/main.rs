@@ -28,6 +28,16 @@ enum Commands {
 
     /// Initialize configuration file
     ConfigInit,
+
+    /// Run a YAML workflow
+    Run {
+        /// Path to the workflow YAML file
+        workflow: String,
+
+        /// Input parameters (key=value format, repeatable)
+        #[arg(long, value_parser = parse_key_value)]
+        input: Vec<String>,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -189,6 +199,18 @@ command = "xuanji-mcp-shell"
 "#;
             std::fs::write("xuanji.toml", example)?;
             println!("Created xuanji.toml");
+        }
+
+        // Run workflow: xuanji run <workflow.yaml>
+        (None, Some(Commands::Run { workflow, input })) => {
+            let (_, provider_config) = get_default_provider(&config)?;
+            commands::workflow::run_workflow(
+                &workflow,
+                &input,
+                &provider_config,
+                &config.mcp_servers,
+            )
+            .await?;
         }
 
         // No args - show help
