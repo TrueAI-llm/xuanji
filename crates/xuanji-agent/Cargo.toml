@@ -16,3 +16,5 @@ futures = "0.3"
 xuanji-llm = { path = "../xuanji-llm" }
 xuanji-plugin = { path = "../xuanji-plugin" }
 xuanji-memory = { path = "../xuanji-memory" }
+xuanji-bus = { path = "../xuanji-bus" }
+xuanji-budget = { path = "../xuanji-budget" }

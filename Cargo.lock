@@ -2561,9 +2561,32 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "xuanji-budget",
+ "xuanji-bus",
  "xuanji-llm",
  "xuanji-memory",
  "xuanji-plugin",
+]
+
+[[package]]
+name = "xuanji-budget"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "xuanji-bus"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2582,6 +2605,8 @@ dependencies = [
  "tracing-subscriber",
  "which",
  "xuanji-agent",
+ "xuanji-budget",
+ "xuanji-bus",
  "xuanji-core",
  "xuanji-llm",
  "xuanji-memory",
@@ -2594,6 +2619,7 @@ name = "xuanji-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "petgraph",
  "regex",
  "serde",
@@ -2602,6 +2628,9 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "xuanji-agent",
+ "xuanji-budget",
+ "xuanji-bus",
  "xuanji-llm",
  "xuanji-plugin",
 ]

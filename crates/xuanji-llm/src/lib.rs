@@ -12,4 +12,4 @@ pub use error::LlmError;
 pub use openai::OpenAIProvider;
 pub use protocol::Protocol;
 pub use provider::LlmProvider;
-pub use types::{LlmResponse, Message, ToolCall, ToolSchema};
+pub use types::{LlmResponse, Message, ToolCall, ToolSchema, Usage};

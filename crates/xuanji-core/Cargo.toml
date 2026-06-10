@@ -15,3 +15,7 @@ petgraph = "0.7"
 regex = "1"
 xuanji-llm = { path = "../xuanji-llm" }
 xuanji-plugin = { path = "../xuanji-plugin" }
+xuanji-agent = { path = "../xuanji-agent" }
+xuanji-bus = { path = "../xuanji-bus" }
+xuanji-budget = { path = "../xuanji-budget" }
+async-trait.workspace = true

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use xuanji_agent::types::AgentConfig;
+use xuanji_budget::BudgetConfig;
 use xuanji_llm::LlmConfig;
 use xuanji_memory::MemoryConfig;
 use xuanji_plugin::types::McpServerConfig;
@@ -27,6 +28,8 @@ pub struct XuanjiConfig {
     pub trigger: TriggerConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub budget: BudgetConfig,
 }
 
 impl Default for XuanjiConfig {
@@ -40,6 +43,7 @@ impl Default for XuanjiConfig {
             mcp_servers: Vec::new(),
             trigger: TriggerConfig::default(),
             memory: MemoryConfig::default(),
+            budget: BudgetConfig::default(),
         }
     }
 }
@@ -152,6 +156,7 @@ impl XuanjiConfig {
         }
         self.trigger = other.trigger;
         self.memory = other.memory;
+        self.budget = other.budget;
         self
     }
 }

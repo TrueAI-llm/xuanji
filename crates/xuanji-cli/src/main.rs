@@ -51,6 +51,19 @@ enum Commands {
         action: MemoryAction,
     },
 
+    /// Run a multi-agent swarm task
+    Swarm {
+        /// Task description for multi-agent collaboration
+        task: Vec<String>,
+
+        /// Number of worker agents
+        #[arg(long, default_value = "2")]
+        workers: u32,
+    },
+
+    /// Show budget configuration
+    Budget,
+
     /// Internal: run the daemon process (hidden)
     #[command(hide = true)]
     #[command(name = "_daemon_run")]
@@ -341,6 +354,25 @@ command = "xuanji-mcp-shell"
                 anyhow::bail!("Rule text cannot be empty");
             }
             commands::memory::add_rule(&rule)?;
+        }
+
+        // Swarm mode
+        (None, Some(Commands::Swarm { task, workers })) => {
+            let (_, provider_config) = main_fns::get_default_provider(&config)?;
+            let task_str = task.join(" ");
+            commands::swarm::run_swarm(
+                &task_str,
+                workers,
+                &provider_config,
+                &config.agent,
+                &config.mcp_servers,
+                &config.budget,
+            ).await?;
+        }
+
+        // Budget status
+        (None, Some(Commands::Budget)) => {
+            commands::swarm::show_budget(&config.budget).await?;
         }
 
         // Internal: daemon run

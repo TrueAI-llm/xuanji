@@ -1,12 +1,15 @@
+use xuanji_bus::KnowledgeMessage;
 use xuanji_llm::ToolSchema;
 use xuanji_memory::working::WorkingMemory;
 
-/// Build the system prompt with tools, working memory, and optional long-term memory context.
+/// Build the system prompt with tools, working memory, optional long-term memory context,
+/// and optional bus messages from other agents.
 pub fn build_system_prompt(
     tools: &[ToolSchema],
     working_memory: Option<&WorkingMemory>,
     memory_context: Option<&str>,
     text_tool_mode: bool,
+    bus_messages: Option<&[KnowledgeMessage]>,
 ) -> String {
     let mut prompt = String::from(
         r#"你是 xuanji，一个自动化任务执行助手。
@@ -73,6 +76,12 @@ PARAMS: {"command": "ls -la"}
 
     if let Some(ctx) = memory_context {
         prompt.push_str(&format!("\n## 项目知识\n{}\n", ctx));
+    }
+
+    if let Some(messages) = bus_messages {
+        if !messages.is_empty() {
+            prompt.push_str(&xuanji_bus::KnowledgeBus::format_messages(messages));
+        }
     }
 
     prompt

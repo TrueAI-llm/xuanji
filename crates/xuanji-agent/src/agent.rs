@@ -2,12 +2,16 @@ use crate::error::AgentError;
 use crate::prompt::build_system_prompt;
 use crate::risk::RiskChecker;
 use crate::types::{AgentConfig, ToolResult};
+use xuanji_budget::BudgetController;
+use xuanji_bus::state::SharedState;
+use xuanji_bus::{KnowledgeBus, KnowledgeMessage};
 use xuanji_llm::{LlmProvider, LlmResponse, Message, ToolCall};
-use xuanji_memory::long_term::{HistoryEntry, LongTermMemory, MemoryContent};
+use xuanji_memory::long_term::{HistoryEntry, LongTermMemory};
 use xuanji_memory::short_term::ShortTermMemory;
 use xuanji_memory::working::WorkingMemory;
 use xuanji_memory::MemoryConfig;
 use xuanji_plugin::ToolRegistry;
+use std::sync::Arc;
 
 /// The main Agent that drives the ReAct loop.
 pub struct Agent {
@@ -20,6 +24,16 @@ pub struct Agent {
     long_term_memory: Option<LongTermMemory>,
     /// Persistent short-term memory for chat mode (cross-turn).
     chat_memory: Option<ShortTermMemory>,
+    /// Agent name for identification in multi-agent scenarios.
+    agent_name: String,
+    /// Knowledge bus for inter-agent communication.
+    bus: Option<KnowledgeBus>,
+    /// Budget controller for token metering.
+    budget: Option<Arc<BudgetController>>,
+    /// Shared state for conflict prevention.
+    shared_state: Option<Arc<SharedState>>,
+    /// Recursion depth (0 = top-level agent).
+    depth: u32,
 }
 
 /// Parsed text-based tool call from LLM output.
@@ -123,12 +137,47 @@ impl Agent {
             memory_config: MemoryConfig::default(),
             long_term_memory: None,
             chat_memory: None,
+            agent_name: "main".to_string(),
+            bus: None,
+            budget: None,
+            shared_state: None,
+            depth: 0,
         }
     }
 
     /// Set long-term memory for this agent.
     pub fn with_long_term_memory(mut self, memory: LongTermMemory) -> Self {
         self.long_term_memory = Some(memory);
+        self
+    }
+
+    /// Set the agent name for identification in multi-agent scenarios.
+    pub fn with_name(mut self, name: &str) -> Self {
+        self.agent_name = name.to_string();
+        self
+    }
+
+    /// Set the knowledge bus for inter-agent communication.
+    pub fn with_bus(mut self, bus: KnowledgeBus) -> Self {
+        self.bus = Some(bus);
+        self
+    }
+
+    /// Set the budget controller for token metering.
+    pub fn with_budget(mut self, budget: Arc<BudgetController>) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
+    /// Set the shared state for conflict prevention.
+    pub fn with_shared_state(mut self, state: Arc<SharedState>) -> Self {
+        self.shared_state = Some(state);
+        self
+    }
+
+    /// Set the recursion depth (0 = top-level).
+    pub fn with_depth(mut self, depth: u32) -> Self {
+        self.depth = depth;
         self
     }
 
@@ -152,10 +201,13 @@ impl Agent {
         let mut short_term = self.chat_memory.take()
             .unwrap_or_else(|| ShortTermMemory::new(self.memory_config.clone()));
 
+        // Set up bus message receiver if bus is available
+        let mut bus_rx = self.bus.as_ref().map(|b| b.subscribe());
+
         let mut working = WorkingMemory::new();
         working.goal = Some(user_input.clone());
 
-        let system_prompt = build_system_prompt(&tools, Some(&working), memory_context.as_deref(), text_tool_mode);
+        let system_prompt = build_system_prompt(&tools, Some(&working), memory_context.as_deref(), text_tool_mode, None);
         short_term.push(Message::System {
             content: system_prompt,
         });
@@ -174,16 +226,39 @@ impl Agent {
             }
             loop_count += 1;
 
-            // Rebuild system prompt with updated working memory
-            let system_prompt = build_system_prompt(&tools, Some(&working), memory_context.as_deref(), text_tool_mode);
+            // Check budget before each LLM call
+            if let Some(budget) = &self.budget {
+                if let Err(e) = budget.acquire(&self.agent_name, 1000).await {
+                    tracing::warn!("Budget exceeded for {}: {}", self.agent_name, e);
+                    final_result = format!("预算超限: {}", e);
+                    break;
+                }
+            }
+
+            // Poll bus messages and collect any new ones
+            let bus_messages = self.poll_bus_messages(&mut bus_rx);
+
+            // Rebuild system prompt with updated working memory and bus messages
+            let system_prompt = build_system_prompt(
+                &tools, Some(&working), memory_context.as_deref(), text_tool_mode,
+                if bus_messages.is_empty() { None } else { Some(&bus_messages) },
+            );
             let messages = Self::prepare_messages(&short_term, &system_prompt);
 
-            tracing::info!("Agent loop iteration {loop_count}");
+            tracing::info!("Agent [{}] loop iteration {loop_count}", self.agent_name);
             let response = if text_tool_mode {
                 self.provider.complete(&messages, &[]).await?
             } else {
                 self.provider.complete(&messages, &tools).await?
             };
+
+            // Report token usage to budget controller
+            let usage = response.usage();
+            if let Some(budget) = &self.budget {
+                if usage.total_tokens > 0 {
+                    budget.report(&self.agent_name, usage.total_tokens).await;
+                }
+            }
 
             if text_tool_mode {
                 let content = response.text_content().unwrap_or("").to_string();
@@ -206,19 +281,21 @@ impl Agent {
                     };
                     let result = self.execute_tool(&fake_call).await;
 
-                    // Update working memory
+                    // Update working memory and publish to bus
                     if result.success {
                         working.key_results.push(format!(
                             "{}: {}",
                             result.tool_name,
                             truncate(&result.result, 200)
                         ));
+                        self.publish_tool_success(&result.tool_name, &result.result);
                     } else {
                         working.errors.push(format!(
                             "{}: {}",
                             result.tool_name,
                             truncate(&result.result, 200)
                         ));
+                        self.publish_tool_failure(&result.tool_name, &result.result);
                     }
 
                     let result_text = if result.success {
@@ -256,7 +333,7 @@ impl Agent {
                             results.push(result);
                         }
 
-                        // Update working memory with results
+                        // Update working memory with results and publish to bus
                         for result in &results {
                             if result.success {
                                 working.key_results.push(format!(
@@ -264,12 +341,14 @@ impl Agent {
                                     result.tool_name,
                                     truncate(&result.result, 200)
                                 ));
+                                self.publish_tool_success(&result.tool_name, &result.result);
                             } else {
                                 working.errors.push(format!(
                                     "{}: {}",
                                     result.tool_name,
                                     truncate(&result.result, 200)
                                 ));
+                                self.publish_tool_failure(&result.tool_name, &result.result);
                             }
                         }
 
@@ -304,6 +383,48 @@ impl Agent {
         self.chat_memory = Some(short_term);
 
         Ok(final_result)
+    }
+
+    /// Poll the bus for new messages (non-blocking).
+    fn poll_bus_messages(
+        &self,
+        bus_rx: &mut Option<tokio::sync::broadcast::Receiver<KnowledgeMessage>>,
+    ) -> Vec<KnowledgeMessage> {
+        let Some(rx) = bus_rx else { return Vec::new() };
+        let mut messages = Vec::new();
+        // Drain up to 10 messages to avoid flooding the prompt
+        for _ in 0..10 {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    // Skip our own messages
+                    if msg.source_agent != self.agent_name {
+                        messages.push(msg);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        messages
+    }
+
+    /// Publish a tool success as a discovery on the bus.
+    fn publish_tool_success(&self, tool_name: &str, result: &str) {
+        if let Some(bus) = &self.bus {
+            bus.publish_discovery(&self.agent_name, serde_json::json!({
+                "tool": tool_name,
+                "text": truncate(result, 200),
+            }));
+        }
+    }
+
+    /// Publish a tool failure as a warning on the bus.
+    fn publish_tool_failure(&self, tool_name: &str, result: &str) {
+        if let Some(bus) = &self.bus {
+            bus.publish_warning(&self.agent_name, serde_json::json!({
+                "tool": tool_name,
+                "text": truncate(result, 200),
+            }));
+        }
     }
 
     /// Execute a single tool call.

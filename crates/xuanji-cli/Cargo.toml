@@ -24,4 +24,6 @@ xuanji-agent = { path = "../xuanji-agent" }
 xuanji-memory = { path = "../xuanji-memory" }
 xuanji-core = { path = "../xuanji-core" }
 xuanji-trigger = { path = "../xuanji-trigger" }
+xuanji-bus = { path = "../xuanji-bus" }
+xuanji-budget = { path = "../xuanji-budget" }
 libc = "0.2"

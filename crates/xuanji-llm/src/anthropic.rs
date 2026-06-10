@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::config::ProviderConfig;
 use crate::error::LlmError;
 use crate::provider::LlmProvider;
-use crate::types::{LlmResponse, Message, ToolCall, ToolSchema};
+use crate::types::{LlmResponse, Message, ToolCall, ToolSchema, Usage};
 
 pub struct AnthropicProvider {
     config: ProviderConfig,
@@ -146,6 +146,14 @@ impl AnthropicProvider {
     }
 
     fn parse_response(&self, value: &Value) -> Result<LlmResponse, LlmError> {
+        // Extract usage information (Anthropic uses input_tokens/output_tokens)
+        let usage = value.get("usage").map(|u| {
+            let prompt_tokens = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let completion_tokens = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let total_tokens = prompt_tokens + completion_tokens;
+            Usage { prompt_tokens, completion_tokens, total_tokens }
+        }).unwrap_or_default();
+
         let content_array = value
             .get("content")
             .ok_or_else(|| LlmError::ParseError("missing content field".into()))?
@@ -202,10 +210,12 @@ impl AnthropicProvider {
             Ok(LlmResponse::ToolCalls {
                 calls: tool_calls,
                 text,
+                usage,
             })
         } else {
             Ok(LlmResponse::Text {
                 content: text.unwrap_or_default(),
+                usage,
             })
         }
     }

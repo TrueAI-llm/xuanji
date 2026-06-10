@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::config::ProviderConfig;
 use crate::error::LlmError;
 use crate::provider::LlmProvider;
-use crate::types::{LlmResponse, Message, ToolCall, ToolSchema};
+use crate::types::{LlmResponse, Message, ToolCall, ToolSchema, Usage};
 
 pub struct OpenAIProvider {
     config: ProviderConfig,
@@ -120,6 +120,14 @@ impl OpenAIProvider {
     }
 
     fn parse_response(&self, value: &Value) -> Result<LlmResponse, LlmError> {
+        // Extract usage information
+        let usage = value.get("usage").map(|u| {
+            let prompt_tokens = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let completion_tokens = u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let total_tokens = u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            Usage { prompt_tokens, completion_tokens, total_tokens }
+        }).unwrap_or_default();
+
         let choices = value
             .get("choices")
             .ok_or_else(|| LlmError::ParseError("missing choices field".into()))?
@@ -163,12 +171,14 @@ impl OpenAIProvider {
                 return Ok(LlmResponse::ToolCalls {
                     calls,
                     text: content,
+                    usage,
                 });
             }
         }
 
         Ok(LlmResponse::Text {
             content: content.unwrap_or_default(),
+            usage,
         })
     }
 }
