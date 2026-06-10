@@ -42,7 +42,7 @@ impl McpProcess {
             cmd.args(&self.config.args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+                .stderr(Stdio::null());
 
             // Merge configured env vars into the child environment.
             for (k, v) in &self.config.env {
