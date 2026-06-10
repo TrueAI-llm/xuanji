@@ -12,15 +12,16 @@ use xuanji_plugin::ToolRegistry;
 use xuanji_agent::Agent;
 
 /// Render markdown text to the terminal with colors and formatting.
-/// Uses write_text_on to avoid crossterm raw mode issues.
+/// Renders to an in-memory buffer first to avoid crossterm terminal state issues.
 pub fn render_markdown(text: &str) {
     let skin = MadSkin::default();
-    let mut stdout = std::io::stdout().lock();
-    if let Err(e) = skin.write_text_on(&mut stdout, text) {
-        // Fallback to plain text if rendering fails
-        drop(stdout);
+    let mut buf = Vec::new();
+    if skin.write_text_on(&mut buf, text).is_ok() {
+        let output = String::from_utf8_lossy(&buf);
+        print!("{}", output);
+    } else {
+        // Fallback to plain text
         println!("{}", text);
-        tracing::debug!("Markdown render failed: {}", e);
     }
 }
 
