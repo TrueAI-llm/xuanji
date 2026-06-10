@@ -3,6 +3,7 @@ use crate::prompt::build_system_prompt;
 use crate::risk::RiskChecker;
 use crate::types::{AgentConfig, ToolResult};
 use xuanji_llm::{LlmProvider, LlmResponse, Message, ToolCall};
+use xuanji_memory::long_term::{HistoryEntry, LongTermMemory, MemoryContent};
 use xuanji_memory::short_term::ShortTermMemory;
 use xuanji_memory::working::WorkingMemory;
 use xuanji_memory::MemoryConfig;
@@ -15,6 +16,10 @@ pub struct Agent {
     config: AgentConfig,
     risk_checker: RiskChecker,
     memory_config: MemoryConfig,
+    /// Optional long-term memory for cross-session persistence.
+    long_term_memory: Option<LongTermMemory>,
+    /// Persistent short-term memory for chat mode (cross-turn).
+    chat_memory: Option<ShortTermMemory>,
 }
 
 /// Parsed text-based tool call from LLM output.
@@ -28,20 +33,16 @@ struct TextToolCall {
 /// Strip <think...</think/> blocks from reasoning models like deepseek-r1.
 fn strip_think_blocks(text: &str) -> String {
     let mut result = text.to_string();
-    // Handle <think ...>...</think/> or </think > variants
     loop {
         let start = result.find("<think");
         if let Some(s) = start {
-            // Find the closing tag - try </think first, then </think/>
             let end = result[s..].find("</think").map(|e| {
-                // Find the '>' after </think
-                let close_start = s + e + 7; // len of "</think"
+                let close_start = s + e + 7;
                 result[close_start..].find('>').map(|gt| close_start + gt + 1).unwrap_or(close_start)
             });
             if let Some(e) = end {
                 result = format!("{}{}", &result[..s], &result[e..]);
             } else {
-                // No closing tag found, strip from <think to end
                 result = result[..s].to_string();
                 break;
             }
@@ -53,39 +54,28 @@ fn strip_think_blocks(text: &str) -> String {
 }
 
 /// Parse ACTION/PARAMS blocks from LLM text output.
-/// Falls back to extracting commands from ```shell/```bash code blocks.
 fn parse_text_tool_calls(text: &str) -> Option<TextToolCall> {
-    // First strip any <think/> blocks
     let cleaned = strip_think_blocks(text);
-
-    // Try ACTION/PARAMS format first
     if let Some(tc) = parse_action_format(&cleaned) {
         return Some(tc);
     }
-
-    // Fallback: extract first command from markdown code blocks
     parse_code_block(&cleaned)
 }
 
 fn parse_action_format(cleaned: &str) -> Option<TextToolCall> {
     let action_pos = cleaned.rfind("ACTION:")?;
     let after_action = &cleaned[action_pos + 7..];
-
     let tool_name = after_action.lines().next().unwrap_or("").trim().to_string();
     if tool_name.is_empty() {
         return None;
     }
-
     let after_action_trimmed = after_action.trim_start();
     let params_pos = after_action_trimmed.find("PARAMS:")?;
     let after_params = &after_action_trimmed[params_pos + 7..];
     let params_line = after_params.lines().next().unwrap_or("{}").trim();
-
     let arguments: serde_json::Value =
         serde_json::from_str(params_line).unwrap_or(serde_json::json!({}));
-
     let reasoning = cleaned[..action_pos].trim().to_string();
-
     Some(TextToolCall {
         tool_name,
         arguments,
@@ -93,17 +83,13 @@ fn parse_action_format(cleaned: &str) -> Option<TextToolCall> {
     })
 }
 
-/// Parse the first ```shell or ```bash code block and use it as a shell.run call.
 fn parse_code_block(cleaned: &str) -> Option<TextToolCall> {
-    // Find opening ```shell or ```bash or ```sh
     for tag in &["```shell", "```bash", "```sh"] {
         if let Some(start) = cleaned.find(tag) {
             let code_start = start + tag.len();
-            // Find closing ```
             if let Some(end) = cleaned[code_start..].find("```") {
                 let code = cleaned[code_start..code_start + end].trim();
                 if !code.is_empty() {
-                    // Take only the first command (first non-empty line)
                     let cmd = code.lines()
                         .find(|l| !l.trim().is_empty())
                         .unwrap_or("")
@@ -135,39 +121,63 @@ impl Agent {
             config,
             risk_checker,
             memory_config: MemoryConfig::default(),
+            long_term_memory: None,
+            chat_memory: None,
+        }
+    }
+
+    /// Set long-term memory for this agent.
+    pub fn with_long_term_memory(mut self, memory: LongTermMemory) -> Self {
+        self.long_term_memory = Some(memory);
+        self
+    }
+
+    /// Enable chat mode: short-term memory persists across run() calls.
+    pub fn enable_chat_mode(&mut self) {
+        if self.chat_memory.is_none() {
+            self.chat_memory = Some(ShortTermMemory::new(self.memory_config.clone()));
         }
     }
 
     /// Run a single-shot agent task.
     pub async fn run(&mut self, user_input: String) -> Result<String, AgentError> {
         let tools = self.registry.all_tool_schemas();
-        let mut short_term = ShortTermMemory::new(self.memory_config.clone());
+        let text_tool_mode = self.config.text_tool_mode;
+
+        // Load long-term memory context first (before any mutable borrows)
+        let memory_context = self.load_memory_context();
+
+        // Take chat_memory out of self to avoid borrow conflicts.
+        // We'll put it back at the end of this method.
+        let mut short_term = self.chat_memory.take()
+            .unwrap_or_else(|| ShortTermMemory::new(self.memory_config.clone()));
+
         let mut working = WorkingMemory::new();
         working.goal = Some(user_input.clone());
 
-        let text_tool_mode = self.config.text_tool_mode;
-
-        let system_prompt = build_system_prompt(&tools, Some(&working), None, text_tool_mode);
+        let system_prompt = build_system_prompt(&tools, Some(&working), memory_context.as_deref(), text_tool_mode);
         short_term.push(Message::System {
             content: system_prompt,
         });
         short_term.push(Message::User {
-            content: user_input,
+            content: user_input.clone(),
         });
 
         let mut loop_count = 0;
+        let mut final_result = String::new();
 
         loop {
             if loop_count >= self.config.max_loops {
+                // Save history before returning error
+                self.save_history(&user_input, "超过最大循环次数", false);
                 return Err(AgentError::MaxLoopsExceeded(self.config.max_loops));
             }
             loop_count += 1;
 
-            // Build system prompt with current working memory
-            let system_prompt = build_system_prompt(&tools, Some(&working), None, text_tool_mode);
-            let messages = self.prepare_messages(&short_term, &system_prompt);
+            // Rebuild system prompt with updated working memory
+            let system_prompt = build_system_prompt(&tools, Some(&working), memory_context.as_deref(), text_tool_mode);
+            let messages = Self::prepare_messages(&short_term, &system_prompt);
 
-            // Call LLM — in text_tool_mode, send empty tools slice
             tracing::info!("Agent loop iteration {loop_count}");
             let response = if text_tool_mode {
                 self.provider.complete(&messages, &[]).await?
@@ -176,23 +186,19 @@ impl Agent {
             };
 
             if text_tool_mode {
-                // Text-based tool calling mode
                 let content = response.text_content().unwrap_or("").to_string();
                 tracing::debug!("LLM response text: {}", content);
 
-                // Check if the response contains an ACTION block
                 if let Some(parsed) = parse_text_tool_calls(&content) {
                     if !parsed.reasoning.is_empty() {
                         tracing::info!("Agent reasoning: {}", parsed.reasoning);
                     }
                     tracing::info!("Text tool call: {}({})", parsed.tool_name, parsed.arguments);
 
-                    // Store assistant message
                     short_term.push(Message::Assistant {
                         content: content.clone(),
                     });
 
-                    // Execute the tool
                     let fake_call = ToolCall {
                         id: format!("text-{}", loop_count),
                         name: parsed.tool_name.clone(),
@@ -200,7 +206,21 @@ impl Agent {
                     };
                     let result = self.execute_tool(&fake_call).await;
 
-                    // Feed result back as user message
+                    // Update working memory
+                    if result.success {
+                        working.key_results.push(format!(
+                            "{}: {}",
+                            result.tool_name,
+                            truncate(&result.result, 200)
+                        ));
+                    } else {
+                        working.errors.push(format!(
+                            "{}: {}",
+                            result.tool_name,
+                            truncate(&result.result, 200)
+                        ));
+                    }
+
                     let result_text = if result.success {
                         format!("工具 {} 执行成功:\n{}", result.tool_name, result.result)
                     } else {
@@ -211,36 +231,48 @@ impl Agent {
                         content: result_text,
                     });
                 } else {
-                    // No ACTION block — final text response
-                    return Ok(content);
+                    final_result = content;
+                    break;
                 }
             } else {
-                // Native tool calling mode
                 match response {
                     LlmResponse::ToolCalls { .. } => {
                         let calls = response.tool_calls().to_vec();
 
-                        // Log reasoning if present
                         if let Some(text) = response.text_content() {
                             if !text.is_empty() {
                                 tracing::info!("Agent reasoning: {}", text);
                             }
                         }
 
-                        // Push assistant tool calls to history
                         short_term.push(Message::AssistantToolCalls {
                             tool_calls: calls.clone(),
                             content: response.text_content().map(String::from),
                         });
 
-                        // Execute all tool calls sequentially
                         let mut results = Vec::new();
                         for call in &calls {
                             let result = self.execute_tool(call).await;
                             results.push(result);
                         }
 
-                        // Push all tool results to history
+                        // Update working memory with results
+                        for result in &results {
+                            if result.success {
+                                working.key_results.push(format!(
+                                    "{}: {}",
+                                    result.tool_name,
+                                    truncate(&result.result, 200)
+                                ));
+                            } else {
+                                working.errors.push(format!(
+                                    "{}: {}",
+                                    result.tool_name,
+                                    truncate(&result.result, 200)
+                                ));
+                            }
+                        }
+
                         for result in &results {
                             short_term.push(Message::ToolResult {
                                 tool_call_id: result.tool_call_id.clone(),
@@ -252,24 +284,36 @@ impl Agent {
                     }
 
                     LlmResponse::Text { .. } => {
-                        let content = response.text_content().unwrap_or("").to_string();
-                        return Ok(content);
+                        final_result = response.text_content().unwrap_or("").to_string();
+                        break;
                     }
                 }
             }
         }
+
+        // Save execution history
+        let success = working.errors.is_empty();
+        let summary = if success {
+            format!("完成，{} 个关键结果", working.key_results.len())
+        } else {
+            format!("完成但有 {} 个错误", working.errors.len())
+        };
+        self.save_history(&user_input, &summary, success);
+
+        // Restore chat memory (was taken at the start of run())
+        self.chat_memory = Some(short_term);
+
+        Ok(final_result)
     }
 
     /// Execute a single tool call.
     async fn execute_tool(&self, call: &ToolCall) -> ToolResult {
         tracing::info!("Calling tool: {}({})", call.name, call.arguments);
 
-        // Risk check
         if self.config.confirm_risky && self.risk_checker.is_risky(&call.name, &call.arguments) {
             tracing::warn!("Risky tool call detected: {}", call.name);
         }
 
-        // Execute via MCP or system tool
         match self.registry.call_tool(&call.name, call.arguments.clone()).await {
             Ok(mcp_result) => {
                 let text = mcp_result
@@ -300,17 +344,72 @@ impl Agent {
     }
 
     /// Prepare messages with updated system prompt.
-    fn prepare_messages(&self, memory: &ShortTermMemory, system_prompt: &str) -> Vec<Message> {
+    fn prepare_messages(memory: &ShortTermMemory, system_prompt: &str) -> Vec<Message> {
         let mut messages = Vec::new();
         messages.push(Message::System {
             content: system_prompt.to_string(),
         });
-        // Skip the first system message from memory, use the fresh one
         for msg in memory.messages().iter().skip(1) {
             messages.push(msg.clone());
         }
         messages
     }
+
+    /// Load long-term memory context as a string for prompt injection.
+    fn load_memory_context(&self) -> Option<String> {
+        let ltm = self.long_term_memory.as_ref()?;
+        let cwd = std::env::current_dir().ok()?;
+        let content = ltm.load_for_project(&cwd).ok()?;
+
+        // Only return if there's actual content
+        let ctx = LongTermMemory::to_prompt_context(&content);
+        if ctx.is_empty() {
+            None
+        } else {
+            Some(ctx)
+        }
+    }
+
+    /// Save execution history to long-term memory.
+    fn save_history(&self, goal: &str, summary: &str, success: bool) {
+        if let Some(ltm) = &self.long_term_memory {
+            if let Ok(cwd) = std::env::current_dir() {
+                let timestamp = format_date();
+                let entry = HistoryEntry {
+                    timestamp,
+                    goal: truncate(goal, 200).to_string(),
+                    summary: truncate(summary, 200).to_string(),
+                    success,
+                };
+                if let Err(e) = ltm.append_history(&cwd, entry) {
+                    tracing::warn!("Failed to save history: {}", e);
+                }
+            }
+        }
+    }
+}
+
+/// Truncate a string to max_len characters.
+fn truncate(s: &str, max_len: usize) -> &str {
+    if s.len() <= max_len {
+        s
+    } else {
+        // Find a char boundary near max_len
+        let mut end = max_len;
+        while !s.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        &s[..end]
+    }
+}
+
+/// Get current date as YYYY-MM-DD.
+fn format_date() -> String {
+    std::process::Command::new("date")
+        .arg("+%Y-%m-%d")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use xuanji_agent::types::AgentConfig;
 use xuanji_llm::LlmConfig;
+use xuanji_memory::MemoryConfig;
 use xuanji_plugin::types::McpServerConfig;
 use xuanji_trigger::TriggerConfig;
 
@@ -24,6 +25,8 @@ pub struct XuanjiConfig {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub trigger: TriggerConfig,
+    #[serde(default)]
+    pub memory: MemoryConfig,
 }
 
 impl Default for XuanjiConfig {
@@ -36,6 +39,7 @@ impl Default for XuanjiConfig {
             agent: AgentConfig::default(),
             mcp_servers: Vec::new(),
             trigger: TriggerConfig::default(),
+            memory: MemoryConfig::default(),
         }
     }
 }
@@ -147,6 +151,7 @@ impl XuanjiConfig {
             self.mcp_servers = other.mcp_servers;
         }
         self.trigger = other.trigger;
+        self.memory = other.memory;
         self
     }
 }

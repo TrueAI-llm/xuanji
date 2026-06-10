@@ -10,3 +10,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 xuanji-llm = { path = "../xuanji-llm" }
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"

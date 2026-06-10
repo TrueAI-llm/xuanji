@@ -4,6 +4,7 @@ use xuanji_agent::types::AgentConfig;
 use xuanji_llm::anthropic::AnthropicProvider;
 use xuanji_llm::openai::OpenAIProvider;
 use xuanji_llm::{LlmProvider, ProviderConfig, Protocol};
+use xuanji_memory::LongTermMemory;
 use xuanji_plugin::process::McpProcess;
 use xuanji_plugin::types::McpServerConfig;
 use xuanji_plugin::ToolRegistry;
@@ -20,8 +21,13 @@ pub async fn run_agent(
     let registry = create_registry(mcp_servers).await?;
 
     let mut agent = Agent::new(provider, registry, agent_config.clone());
-    let result = agent.run(prompt.to_string()).await?;
 
+    // Attach long-term memory if available
+    if let Ok(ltm) = LongTermMemory::default_path() {
+        agent = agent.with_long_term_memory(ltm);
+    }
+
+    let result = agent.run(prompt.to_string()).await?;
     Ok(result)
 }
 
@@ -38,6 +44,12 @@ pub async fn run_chat(
 
     let stdin = io::stdin();
     let mut agent = Agent::new(provider, registry, agent_config.clone());
+
+    // Attach long-term memory and enable chat mode
+    if let Ok(ltm) = LongTermMemory::default_path() {
+        agent = agent.with_long_term_memory(ltm);
+    }
+    agent.enable_chat_mode();
 
     loop {
         print!("> ");

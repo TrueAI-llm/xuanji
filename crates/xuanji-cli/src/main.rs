@@ -45,6 +45,12 @@ enum Commands {
         action: DaemonAction,
     },
 
+    /// Memory management
+    Memory {
+        #[command(subcommand)]
+        action: MemoryAction,
+    },
+
     /// Internal: run the daemon process (hidden)
     #[command(hide = true)]
     #[command(name = "_daemon_run")]
@@ -67,6 +73,19 @@ enum DaemonAction {
     Status,
     /// Stop the daemon process
     Stop,
+}
+
+#[derive(clap::Subcommand)]
+enum MemoryAction {
+    /// Show current project memory
+    Show,
+    /// Clear current project memory
+    Clear,
+    /// Add a custom rule
+    Rule {
+        /// The rule text to add
+        text: Vec<String>,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -303,6 +322,25 @@ command = "xuanji-mcp-shell"
         // Daemon stop
         (None, Some(Commands::Daemon { action: DaemonAction::Stop })) => {
             commands::daemon::stop_daemon()?;
+        }
+
+        // Memory show
+        (None, Some(Commands::Memory { action: MemoryAction::Show })) => {
+            commands::memory::show_memory()?;
+        }
+
+        // Memory clear
+        (None, Some(Commands::Memory { action: MemoryAction::Clear })) => {
+            commands::memory::clear_memory()?;
+        }
+
+        // Memory rule add
+        (None, Some(Commands::Memory { action: MemoryAction::Rule { text } })) => {
+            let rule = text.join(" ");
+            if rule.is_empty() {
+                anyhow::bail!("Rule text cannot be empty");
+            }
+            commands::memory::add_rule(&rule)?;
         }
 
         // Internal: daemon run
