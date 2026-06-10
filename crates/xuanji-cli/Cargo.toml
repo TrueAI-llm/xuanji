@@ -28,3 +28,4 @@ xuanji-bus = { path = "../xuanji-bus" }
 xuanji-budget = { path = "../xuanji-budget" }
 libc = "0.2"
 termimad = "0.31"
+crossterm = "0.29"

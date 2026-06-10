@@ -389,5 +389,8 @@ command = "xuanji-mcp-shell"
         }
     }
 
+    // Ensure terminal state is restored (in case crossterm left it in raw mode)
+    let _ = crossterm::terminal::disable_raw_mode();
+
     Ok(())
 }
