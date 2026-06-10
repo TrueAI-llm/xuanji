@@ -14,6 +14,8 @@ use xuanji_plugin::process::McpProcess;
 use xuanji_plugin::types::McpServerConfig;
 use xuanji_plugin::{McpClient, ToolRegistry};
 
+use super::agent::render_markdown;
+
 /// Run a multi-agent swarm task.
 pub async fn run_swarm(
     task: &str,
@@ -65,7 +67,11 @@ pub async fn run_swarm(
 
     // 5. Run
     match main_agent.run(task.to_string()).await {
-        Ok(result) => println!("\n{}\n", result),
+        Ok(result) => {
+            println!();
+            render_markdown(&result);
+            println!();
+        }
         Err(e) => println!("\n❌ 任务失败: {}\n", e),
     }
 

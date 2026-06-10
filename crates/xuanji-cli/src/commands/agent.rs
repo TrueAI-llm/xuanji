@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::io::{self, BufRead, Write};
+use termimad::MadSkin;
 use xuanji_agent::types::AgentConfig;
 use xuanji_llm::anthropic::AnthropicProvider;
 use xuanji_llm::openai::OpenAIProvider;
@@ -9,6 +10,12 @@ use xuanji_plugin::process::McpProcess;
 use xuanji_plugin::types::McpServerConfig;
 use xuanji_plugin::ToolRegistry;
 use xuanji_agent::Agent;
+
+/// Render markdown text to the terminal with colors and formatting.
+pub fn render_markdown(text: &str) {
+    let skin = MadSkin::default();
+    skin.print_text(text);
+}
 
 /// Run a single-shot agent task.
 pub async fn run_agent(
@@ -66,7 +73,11 @@ pub async fn run_chat(
         }
 
         match agent.run(input.to_string()).await {
-            Ok(result) => println!("\n{}\n", result),
+            Ok(result) => {
+                println!();
+                render_markdown(&result);
+                println!();
+            }
             Err(e) => println!("\nError: {}\n", e),
         }
     }

@@ -229,7 +229,7 @@ async fn main() -> Result<()> {
             )
             .await?;
 
-            println!("{}", result);
+            commands::agent::render_markdown(&result);
         }
 
         // Chat mode: xuanji chat
