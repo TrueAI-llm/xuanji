@@ -12,6 +12,7 @@ pub struct McpToolInfo {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(rename = "inputSchema")]
     pub input_schema: Value,
 }
 
@@ -229,7 +230,8 @@ impl McpClient {
             writer.flush().await.map_err(PluginError::Process)?;
         }
 
-        // Read response from stdout.
+        // Read response from stdout, skipping non-JSON lines
+        // (some MCP servers output banners or logs to stdout)
         let response_line = {
             let reader = self.stdout.as_mut().ok_or_else(|| {
                 PluginError::Protocol(
@@ -238,10 +240,30 @@ impl McpClient {
             })?;
 
             let mut buf = String::new();
-            reader
-                .read_line(&mut buf)
-                .await
-                .map_err(PluginError::Process)?;
+            loop {
+                buf.clear();
+                let n = reader
+                    .read_line(&mut buf)
+                    .await
+                    .map_err(PluginError::Process)?;
+
+                if n == 0 {
+                    return Err(PluginError::Protocol(
+                        "MCP server closed stdout".into(),
+                    ));
+                }
+
+                let trimmed = buf.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                // Check if this line looks like a JSON-RPC response
+                if trimmed.starts_with('{') {
+                    break;
+                }
+                // Non-JSON line (banner, log, etc.) — skip it
+                tracing::debug!("Skipping non-JSON line from MCP server: {}", trimmed);
+            }
             buf
         };
 

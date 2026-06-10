@@ -91,8 +91,18 @@ async fn create_registry(mcp_servers: &[McpServerConfig]) -> Result<ToolRegistry
     for server_config in mcp_servers {
         let process = McpProcess::new(server_config.clone());
         let mut client = xuanji_plugin::McpClient::new(process);
-        client.initialize().await?;
-        registry.register_server(client).await?;
+        match client.initialize().await {
+            Ok(()) => {
+                registry.register_server(client).await?;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to start MCP server '{}': {}. Skipping.",
+                    server_config.name,
+                    e
+                );
+            }
+        }
     }
 
     Ok(registry)

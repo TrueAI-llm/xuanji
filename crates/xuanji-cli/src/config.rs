@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use xuanji_agent::types::AgentConfig;
@@ -13,7 +13,7 @@ fn default_llm_config() -> LlmConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct XuanjiConfig {
     #[serde(default = "default_llm_config")]
     pub llm: LlmConfig,
@@ -38,6 +38,7 @@ impl Default for XuanjiConfig {
 
 impl XuanjiConfig {
     /// Load config: global (~/.xuanji/config.toml) then local (./xuanji.toml).
+    /// Resolves ${VAR} patterns in api_keys for runtime use.
     pub fn load() -> Result<Self> {
         let mut config = Self::default();
 
@@ -67,11 +68,77 @@ impl XuanjiConfig {
         Ok(config)
     }
 
+    /// Load only the global config file (no env var resolution, no merge).
+    /// Used by add/remove/install to preserve ${VAR} patterns.
+    pub fn load_global_only() -> Result<Self> {
+        let global_path = dirs_data().join("config.toml");
+        if global_path.exists() {
+            let content = std::fs::read_to_string(&global_path)
+                .context(format!("Reading {:?}", global_path))?;
+            let config: Self = toml::from_str(&content)?;
+            Ok(config)
+        } else {
+            Ok(Self::default())
+        }
+    }
+
+    /// Load only the local config file (no env var resolution, no merge).
+    /// Used by add/remove/install to preserve ${VAR} patterns.
+    pub fn load_local_only() -> Result<Self> {
+        let local_path = PathBuf::from("xuanji.toml");
+        if local_path.exists() {
+            let content = std::fs::read_to_string(&local_path)
+                .context("Reading ./xuanji.toml")?;
+            let config: Self = toml::from_str(&content)?;
+            Ok(config)
+        } else {
+            Ok(Self::default())
+        }
+    }
+
+    /// Save config to the project-local xuanji.toml file.
+    pub fn save_local(&self) -> Result<()> {
+        let content = toml::to_string_pretty(self)
+            .context("Serializing config to TOML")?;
+        std::fs::write("xuanji.toml", content)
+            .context("Writing xuanji.toml")?;
+        Ok(())
+    }
+
+    /// Save config to the global ~/.xuanji/config.toml file.
+    pub fn save_global(&self) -> Result<()> {
+        let dir = dirs_data();
+        std::fs::create_dir_all(&dir)
+            .context(format!("Creating directory {:?}", dir))?;
+        let content = toml::to_string_pretty(self)
+            .context("Serializing config to TOML")?;
+        std::fs::write(dir.join("config.toml"), content)
+            .context("Writing global config")?;
+        Ok(())
+    }
+
+    /// Add or replace an MCP server config entry by name.
+    pub fn add_mcp_server(&mut self, server: McpServerConfig) {
+        if let Some(existing) = self.mcp_servers.iter_mut().find(|s| s.name == server.name) {
+            *existing = server;
+        } else {
+            self.mcp_servers.push(server);
+        }
+    }
+
+    /// Remove an MCP server config entry by name. Returns true if found and removed.
+    pub fn remove_mcp_server(&mut self, name: &str) -> bool {
+        let before = self.mcp_servers.len();
+        self.mcp_servers.retain(|s| s.name != name);
+        self.mcp_servers.len() != before
+    }
+
     fn merge(mut self, other: Self) -> Self {
         if other.llm.default_provider.is_some() {
             self.llm.default_provider = other.llm.default_provider;
         }
         self.llm.providers.extend(other.llm.providers);
+        self.agent = other.agent;
         if !other.mcp_servers.is_empty() {
             self.mcp_servers = other.mcp_servers;
         }

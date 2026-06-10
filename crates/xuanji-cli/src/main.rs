@@ -34,6 +34,68 @@ enum Commands {
 enum McpAction {
     /// List registered MCP servers and their tools
     List,
+
+    /// Add an MCP server to the config manually
+    Add {
+        /// Unique name for this MCP server
+        name: String,
+
+        /// Command to execute (e.g., "npx", "python", "/path/to/binary")
+        #[arg(long)]
+        command: String,
+
+        /// Arguments to pass to the command (after --)
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+
+        /// Environment variables (KEY=VALUE format, repeatable)
+        #[arg(long, value_parser = parse_key_value)]
+        env: Vec<String>,
+
+        /// Save to global config (~/.xuanji/config.toml) instead of local
+        #[arg(long)]
+        global: bool,
+    },
+
+    /// Install an MCP server from a package identifier
+    Install {
+        /// Package identifier (npm: @scope/pkg, python: pkg-name)
+        package: String,
+
+        /// Override the server name (defaults to package name)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Force package type: "npm" or "python"
+        #[arg(long, value_name = "TYPE")]
+        r#type: Option<String>,
+
+        /// Environment variables (KEY=VALUE format, repeatable)
+        #[arg(long, value_parser = parse_key_value)]
+        env: Vec<String>,
+
+        /// Save to global config instead of local
+        #[arg(long)]
+        global: bool,
+    },
+
+    /// Remove an MCP server from the config
+    Remove {
+        /// Name of the server to remove
+        name: String,
+
+        /// Remove from global config instead of local
+        #[arg(long)]
+        global: bool,
+    },
+}
+
+fn parse_key_value(s: &str) -> Result<String, String> {
+    if s.contains('=') {
+        Ok(s.to_string())
+    } else {
+        Err(format!("Expected KEY=VALUE format, got: {}", s))
+    }
 }
 
 #[tokio::main]
@@ -47,7 +109,10 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = config::XuanjiConfig::load().unwrap_or_default();
+    let config = config::XuanjiConfig::load().unwrap_or_else(|e| {
+        tracing::warn!("Failed to load config: {}", e);
+        config::XuanjiConfig::default()
+    });
 
     match (cli.prompt, cli.command) {
         // Agent mode: xuanji "task description"
@@ -80,6 +145,27 @@ async fn main() -> Result<()> {
         // MCP list
         (None, Some(Commands::Mcp { action: McpAction::List })) => {
             commands::mcp::list_tools(&config.mcp_servers).await?;
+        }
+
+        // MCP add
+        (None, Some(Commands::Mcp {
+            action: McpAction::Add { name, command, args, env, global },
+        })) => {
+            commands::mcp::add_server(&name, &command, &args, &env, global)?;
+        }
+
+        // MCP install
+        (None, Some(Commands::Mcp {
+            action: McpAction::Install { package, name, r#type, env, global },
+        })) => {
+            commands::mcp::install_server(&package, name.as_deref(), r#type.as_deref(), &env, global)?;
+        }
+
+        // MCP remove
+        (None, Some(Commands::Mcp {
+            action: McpAction::Remove { name, global },
+        })) => {
+            commands::mcp::remove_server(&name, global)?;
         }
 
         // Config init

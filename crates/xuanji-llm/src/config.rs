@@ -1,9 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::protocol::Protocol;
 
 /// Configuration for a single LLM provider.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub protocol: Protocol,
     pub model: String,
@@ -17,7 +17,7 @@ pub struct ProviderConfig {
 }
 
 /// Top-level LLM configuration containing one or more providers.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     #[serde(default)]
     pub default_provider: Option<String>,

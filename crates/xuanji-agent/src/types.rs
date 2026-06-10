@@ -11,6 +11,10 @@ pub struct AgentConfig {
     pub confirm_risky: bool,
     #[serde(default)]
     pub risky_patterns: Vec<RiskyPattern>,
+    /// When true, don't send tools via API (for models that don't support tool calling).
+    /// Instead, include tool descriptions in the system prompt and parse text output.
+    #[serde(default)]
+    pub text_tool_mode: bool,
 }
 
 fn default_max_loops() -> u32 { 20 }
@@ -24,6 +28,7 @@ impl Default for AgentConfig {
             step_timeout: default_step_timeout(),
             confirm_risky: true,
             risky_patterns: Vec::new(),
+            text_tool_mode: false,
         }
     }
 }

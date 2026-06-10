@@ -6,6 +6,7 @@ pub fn build_system_prompt(
     tools: &[ToolSchema],
     working_memory: Option<&WorkingMemory>,
     memory_context: Option<&str>,
+    text_tool_mode: bool,
 ) -> String {
     let mut prompt = String::from(
         r#"你是 xuanji，一个自动化任务执行助手。
@@ -25,9 +26,44 @@ pub fn build_system_prompt(
     );
 
     if !tools.is_empty() {
-        prompt.push_str("\n## 可用工具\n");
-        for tool in tools {
-            prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
+        if text_tool_mode {
+            prompt.push_str("\n## 可用工具\n");
+            for tool in tools {
+                prompt.push_str(&format!(
+                    "- **{}**: {}\n  参数schema: {}\n",
+                    tool.name,
+                    tool.description,
+                    tool.input_schema
+                ));
+            }
+            prompt.push_str(
+                r#"
+## 工具调用格式（必须严格遵守）
+当你需要执行任何操作时，必须使用以下格式调用工具。每次只调用一个工具。
+不要用markdown代码块包裹，直接输出：
+
+ACTION: shell.run
+PARAMS: {"command": "你要执行的命令"}
+
+等待工具返回结果后，再决定下一步操作。
+当所有子任务完成后，直接输出总结文本，不要再用 ACTION 格式。
+
+## 示例
+用户: 列出当前目录的文件
+ACTION: shell.run
+PARAMS: {"command": "ls -la"}
+
+## 重要
+- 不要询问用户，直接开始执行
+- 不要解释你要做什么，直接调用工具
+- 每一步都必须使用 ACTION/PARAMS 格式
+"#,
+            );
+        } else {
+            prompt.push_str("\n## 可用工具\n");
+            for tool in tools {
+                prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
+            }
         }
     }
 
