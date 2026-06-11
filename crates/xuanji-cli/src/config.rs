@@ -138,6 +138,22 @@ impl XuanjiConfig {
         }
     }
 
+    /// Clone the config for saving (preserves ${VAR} patterns in api_keys).
+    /// Unlike load(), this does NOT resolve environment variables.
+    pub fn clone_for_save(&self) -> Self {
+        Self {
+            llm: LlmConfig {
+                default_provider: self.llm.default_provider.clone(),
+                providers: self.llm.providers.clone(),
+            },
+            agent: self.agent.clone(),
+            mcp_servers: self.mcp_servers.clone(),
+            trigger: self.trigger.clone(),
+            memory: self.memory.clone(),
+            budget: self.budget.clone(),
+        }
+    }
+
     /// Remove an MCP server config entry by name. Returns true if found and removed.
     pub fn remove_mcp_server(&mut self, name: &str) -> bool {
         let before = self.mcp_servers.len();

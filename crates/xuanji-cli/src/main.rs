@@ -31,9 +31,9 @@ enum Commands {
 
     /// Interactive setup wizard
     Init {
-        /// Write to global config (~/.xuanji/config.toml) instead of local
+        /// Write to project-local ./xuanji.toml instead of global
         #[arg(long)]
-        global: bool,
+        local: bool,
     },
 
     /// Run a YAML workflow
@@ -329,8 +329,8 @@ confirm_risky = true
         }
 
         // Interactive init
-        (None, Some(Commands::Init { global })) => {
-            commands::init::run_init(global)?;
+        (None, Some(Commands::Init { local })) => {
+            commands::init::run_init(local)?;
         }
 
         // Run workflow: xuanji run <workflow.yaml>
