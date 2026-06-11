@@ -26,8 +26,15 @@ enum Commands {
         action: McpAction,
     },
 
-    /// Initialize configuration file
+    /// Initialize configuration file (non-interactive template)
     ConfigInit,
+
+    /// Interactive setup wizard
+    Init {
+        /// Write to global config (~/.xuanji/config.toml) instead of local
+        #[arg(long)]
+        global: bool,
+    },
 
     /// Run a YAML workflow
     Run {
@@ -293,8 +300,13 @@ async fn main() -> Result<()> {
             commands::mcp::remove_server(&name, global)?;
         }
 
-        // Config init
+        // Config init (non-interactive template)
         (None, Some(Commands::ConfigInit)) => {
+            let path = std::path::Path::new("xuanji.toml");
+            if path.exists() {
+                println!("xuanji.toml already exists. Use 'xuanji init' for interactive setup.");
+                return Ok(());
+            }
             let example = r#"[llm]
 default_provider = "deepseek"
 
@@ -314,6 +326,11 @@ command = "xuanji-mcp-shell"
 "#;
             std::fs::write("xuanji.toml", example)?;
             println!("Created xuanji.toml");
+        }
+
+        // Interactive init
+        (None, Some(Commands::Init { global })) => {
+            commands::init::run_init(global)?;
         }
 
         // Run workflow: xuanji run <workflow.yaml>
