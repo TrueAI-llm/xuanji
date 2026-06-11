@@ -190,7 +190,48 @@ pub struct ScoredCandidate {
 pub struct SubTask {
     pub description: String,
     pub depends_on: Vec<String>,
+    /// Required skill tag for role matching (None = God Role handles it).
+    pub required_skill: Option<String>,
+    /// Role assigned to execute this subtask.
+    pub assignee: Option<String>,
     pub result: Option<String>,
+}
+
+impl SubTask {
+    pub fn new(description: &str) -> Self {
+        Self {
+            description: description.to_string(),
+            depends_on: Vec::new(),
+            required_skill: None,
+            assignee: None,
+            result: None,
+        }
+    }
+}
+
+/// A suggestion from God Role regarding role lifecycle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestrationSuggestion {
+    pub kind: SuggestionKind,
+    pub role_name: String,
+    pub purpose: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuggestionKind {
+    HireRole,
+    FireRole,
+    RedefinePurpose,
+}
+
+/// Result of running a cycle, including orchestration suggestions.
+#[derive(Debug, Clone)]
+pub struct CycleResult {
+    pub outcome: Option<GoalOutcome>,
+    pub suggestions: Vec<OrchestrationSuggestion>,
+    pub dispatched_to: Vec<String>,
 }
 /// A shareable teaching package.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -82,15 +82,81 @@ impl DiscoverEngine {
     }
 
     /// Decompose a goal description into sub-tasks.
-    /// MVP: simple heuristic decomposition.
+    /// MVP: heuristic decomposition. Enhanced mode uses LLM.
     pub fn decompose(goal_description: &str) -> Vec<SubTask> {
+        // Rule-based heuristic: detect keywords and split
+        let lower = goal_description.to_lowercase();
+
+        // "A 和 B" or "A与B" pattern → two subtasks
+        if let Some(pos) = lower.find("和").or_else(|| lower.find("与")) {
+            let part1 = goal_description[..pos].trim().to_string();
+            let part2 = goal_description[pos + 3..].trim().to_string();
+
+            if !part2.is_empty() {
+                let mut tasks = Vec::new();
+
+                // Infer skill from description content
+                let skill1 = infer_skill(&part1);
+                let skill2 = infer_skill(&part2);
+
+                if !part1.is_empty() {
+                    tasks.push(SubTask {
+                        description: part1,
+                        depends_on: Vec::new(),
+                        required_skill: skill1,
+                        assignee: None,
+                        result: None,
+                    });
+                }
+                tasks.push(SubTask {
+                    description: part2,
+                    depends_on: Vec::new(),
+                    required_skill: skill2,
+                    assignee: None,
+                    result: None,
+                });
+                return tasks;
+            }
+        }
+
+        // Default: single task, try to infer skill
         vec![SubTask {
             description: goal_description.to_string(),
             depends_on: Vec::new(),
+            required_skill: infer_skill(goal_description),
+            assignee: None,
             result: None,
         }]
     }
 }
+
+/// Simple keyword-based skill inference.
+fn infer_skill(description: &str) -> Option<String> {
+    let lower = description.to_lowercase();
+    for (keyword, skill) in SKILL_KEYWORDS {
+        if lower.contains(keyword) {
+            return Some(skill.to_string());
+        }
+    }
+    None
+}
+
+/// Keyword → skill mapping.
+const SKILL_KEYWORDS: &[(&str, &str)] = &[
+    ("安全", "security"),
+    ("漏洞", "security"),
+    ("审计", "security"),
+    ("性能", "performance"),
+    ("优化", "performance"),
+    ("文档", "documentation"),
+    ("doc", "documentation"),
+    ("测试", "testing"),
+    ("test", "testing"),
+    ("部署", "devops"),
+    ("deploy", "devops"),
+    ("构建", "build"),
+    ("build", "build"),
+];
 
 #[cfg(test)]
 mod tests {
@@ -164,5 +230,27 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].description, "分析代码质量");
         assert!(tasks[0].depends_on.is_empty());
+    }
+
+    #[test]
+    fn test_decompose_with_he_connector() {
+        let tasks = DiscoverEngine::decompose("审计安全漏洞和优化性能");
+        assert!(tasks.len() >= 2, "Expected >= 2 tasks, got {}", tasks.len());
+        assert!(tasks.iter().any(|t| t.description.contains("安全")));
+        assert!(tasks.iter().any(|t| t.description.contains("性能")));
+    }
+
+    #[test]
+    fn test_decompose_infers_skill() {
+        let tasks = DiscoverEngine::decompose("审计安全漏洞和优化性能");
+        assert!(tasks.iter().any(|t| t.required_skill == Some("security".into())));
+        assert!(tasks.iter().any(|t| t.required_skill == Some("performance".into())));
+    }
+
+    #[test]
+    fn test_decompose_single_skill() {
+        let tasks = DiscoverEngine::decompose("生成项目文档");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].required_skill, Some("documentation".into()));
     }
 }

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::io::Write;
-use xuanji_role::RoleStore;
+use xuanji_role::{Role, RoleStore, SuggestionKind};
 
 /// God Role name constant.
 pub const GOD_NAME: &str = "god";
@@ -10,8 +10,8 @@ const GOD_PURPOSE: &str =
     "统筹管理所有 Role，发现协作机会，优化整体效率";
 
 /// Bootstrap the God Role (idempotent).
-pub fn bootstrap_god() -> Result<xuanji_role::Role> {
-    match xuanji_role::Role::new(GOD_NAME, GOD_PURPOSE) {
+pub fn bootstrap_god() -> Result<Role> {
+    match Role::new(GOD_NAME, GOD_PURPOSE) {
         Ok(mut role) => {
             role.activate();
             role.persist()?;
@@ -20,28 +20,20 @@ pub fn bootstrap_god() -> Result<xuanji_role::Role> {
         }
         Err(e) => {
             tracing::warn!("God Role bootstrap skipped: {}", e);
-            let mut role = xuanji_role::Role::new(GOD_NAME, GOD_PURPOSE)?;
+            let mut role = Role::new(GOD_NAME, GOD_PURPOSE)?;
             role.activate();
             Ok(role)
         }
     }
 }
 
-/// Run a single prompt through God Role.
+/// Run a single prompt through God Role (orchestrated).
 pub async fn run_prompt(prompt: &str) -> Result<()> {
     let mut god = bootstrap_god()?;
-    god.add_user_goal(prompt);
 
-    match god.run_cycle().await {
-        Ok(Some(outcome)) => {
-            if outcome.success {
-                println!("{}", outcome.summary);
-            } else {
-                println!("任务执行遇到问题: {}", outcome.lessons);
-            }
-        }
-        Ok(None) => {
-            println!("(no action taken)");
+    match god.run_orchestrated_cycle(prompt).await {
+        Ok(result) => {
+            print_cycle_result(&result);
         }
         Err(e) => {
             anyhow::bail!("God Role error: {}", e);
@@ -94,7 +86,21 @@ pub async fn run_chat() -> Result<()> {
                             println!("活跃角色:");
                             for name in &names {
                                 let marker = if name == "god" { " \u{1f451}" } else { "" };
-                                println!("  - {}{}", name, marker);
+                                // Try to show profile summary
+                                if let Ok(store) = RoleStore::new(name) {
+                                    if let Ok(Some(profile)) = store.load_profile() {
+                                        println!(
+                                            "  - {}{} | {:?} | {}",
+                                            name, marker,
+                                            profile.evolution_stage,
+                                            profile.seed_purpose
+                                        );
+                                    } else {
+                                        println!("  - {}{}", name, marker);
+                                    }
+                                } else {
+                                    println!("  - {}{}", name, marker);
+                                }
                             }
                         }
                     }
@@ -128,18 +134,10 @@ pub async fn run_chat() -> Result<()> {
                 continue;
             }
             _ => {
-                god.add_user_goal(&input);
-                match god.run_cycle().await {
-                    Ok(Some(outcome)) => {
+                match god.run_orchestrated_cycle(&input).await {
+                    Ok(result) => {
                         println!();
-                        if outcome.success {
-                            println!("目标已执行: {}", outcome.summary);
-                        } else {
-                            println!("执行遇到问题: {}", outcome.lessons);
-                        }
-                    }
-                    Ok(None) => {
-                        println!("(no action)");
+                        print_cycle_result(&result);
                     }
                     Err(e) => {
                         eprintln!("错误: {}", e);
@@ -150,4 +148,45 @@ pub async fn run_chat() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Pretty-print a CycleResult.
+pub(crate) fn print_cycle_result(result: &xuanji_role::CycleResult) {
+    if let Some(outcome) = &result.outcome {
+        println!("📋 任务: {}", outcome.summary);
+    }
+
+    if !result.dispatched_to.is_empty() {
+        println!("📦 已派发至:");
+        for name in &result.dispatched_to {
+            println!("   - {}", name);
+        }
+    }
+
+    if !result.suggestions.is_empty() {
+        println!();
+        println!("💡 建议:");
+        for s in &result.suggestions {
+            match s.kind {
+                SuggestionKind::HireRole => {
+                    println!("   hire \"{}\"", s.role_name);
+                    if let Some(ref purpose) = s.purpose {
+                        println!("     purpose: {}", purpose);
+                    }
+                }
+                SuggestionKind::FireRole => {
+                    println!("   fire \"{}\"", s.role_name);
+                }
+                SuggestionKind::RedefinePurpose => {
+                    println!("   redefine \"{}\"", s.role_name);
+                    if let Some(ref purpose) = s.purpose {
+                        println!("     purpose: {}", purpose);
+                    }
+                }
+            }
+            println!("     理由: {}", s.reason);
+        }
+        println!();
+        println!("执行建议的 role hire/fire 命令后，任务将自动继续。");
+    }
 }

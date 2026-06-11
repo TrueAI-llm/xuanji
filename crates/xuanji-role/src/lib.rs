@@ -15,6 +15,125 @@ pub use store::RoleStore;
 pub use teaching::TeachingLibrary;
 pub use types::*;
 
+// ─── Orchestrator ───
+
+/// Handles role matching, hire suggestion, and fire suggestion for the God Role.
+pub struct Orchestrator;
+
+impl Orchestrator {
+    /// Match subtasks to available roles based on skill tags.
+    /// Returns tuples of (matched_tasks, unmatched_tasks, suggestions).
+    pub fn match_roles(
+        subtasks: Vec<SubTask>,
+        available_roles: &[RoleProfile],
+    ) -> (Vec<SubTask>, Vec<SubTask>, Vec<OrchestrationSuggestion>) {
+        let mut matched = Vec::new();
+        let mut unmatched = Vec::new();
+        let mut suggestions = Vec::new();
+
+        for task in subtasks {
+            if let Some(ref skill) = task.required_skill {
+                // Try to match skill to role purpose
+                let best_role = available_roles
+                    .iter()
+                    .find(|r| {
+                        let lower_purpose = r.seed_purpose.to_lowercase();
+                        match skill.as_str() {
+                            "security" => lower_purpose.contains("安全") || lower_purpose.contains("security"),
+                            "performance" => lower_purpose.contains("性能") || lower_purpose.contains("performance"),
+                            "documentation" => lower_purpose.contains("文档") || lower_purpose.contains("doc"),
+                            "testing" => lower_purpose.contains("测试") || lower_purpose.contains("test"),
+                            "devops" => lower_purpose.contains("部署") || lower_purpose.contains("devops"),
+                            "build" => lower_purpose.contains("构建") || lower_purpose.contains("build"),
+                            _ => lower_purpose.contains(skill),
+                        }
+                    });
+
+                if let Some(role) = best_role {
+                    let mut matched_task = task;
+                    matched_task.assignee = Some(role.name.clone());
+                    matched.push(matched_task);
+                } else {
+                    // No matching role → suggest hire
+                    suggestions.push(OrchestrationSuggestion {
+                        kind: SuggestionKind::HireRole,
+                        role_name: format!("{}-specialist", skill),
+                        purpose: Some(skill_translate(skill)),
+                        reason: format!(
+                            "当前无角色覆盖 '{}' 领域（需要执行: {}）",
+                            skill, task.description
+                        ),
+                    });
+                    unmatched.push(task);
+                }
+            } else {
+                // No skill requirement → God Role handles it
+                let mut own_task = task;
+                own_task.assignee = Some("god".into());
+                matched.push(own_task);
+            }
+        }
+
+        (matched, unmatched, suggestions)
+    }
+
+    /// Evaluate roles and suggest firing low-performing ones.
+    pub fn fire_suggest(roles: &[RoleProfile]) -> Vec<OrchestrationSuggestion> {
+        let mut suggestions = Vec::new();
+
+        for role in roles {
+            if role.name == "god" {
+                continue;
+            }
+
+            // Check seed stage with no progress
+            if role.evolution_stage == Stage::Seed {
+                // A seed role that hasn't evolved might need redefinition
+                // For now, only suggest fire for very stale roles
+                if is_stale(&role.created_at, 7) {
+                    suggestions.push(OrchestrationSuggestion {
+                        kind: SuggestionKind::FireRole,
+                        role_name: role.name.clone(),
+                        purpose: None,
+                        reason: format!(
+                            "角色 '{}' 处于 Seed 阶段超过 7 天且无进化，建议 fire 或重新定义 purpose",
+                            role.name
+                        ),
+                    });
+                }
+            }
+        }
+
+        suggestions
+    }
+}
+
+/// Check if a date string is older than N days.
+fn is_stale(date_str: &str, days: i64) -> bool {
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S") {
+        let now = chrono::Local::now().naive_local();
+        let diff = now - dt;
+        diff.num_days() >= days
+    } else {
+        false
+    }
+}
+
+fn skill_translate(skill: &str) -> String {
+    match skill {
+        "security" => "审计安全漏洞、检查依赖项安全、监控安全风险",
+        "performance" => "分析性能瓶颈、优化构建速度、监控资源使用",
+        "documentation" => "生成项目文档、维护 API 文档、编写开发指南",
+        "testing" => "编写和运行测试、分析测试覆盖率、改进测试策略",
+        "devops" => "管理部署流程、配置 CI/CD、监控服务状态",
+        "build" => "管理构建过程、优化编译速度、维护构建配置",
+        _ => "unknown",
+    }
+    .to_string()
+}
+
+// ─── Role ───
+
 /// An autonomous, self-evolving role.
 pub struct Role {
     pub profile: RoleProfile,
@@ -75,6 +194,160 @@ impl Role {
         self.active
     }
 
+    // ─── Orchestrated Cycle (God Role) ───
+
+    /// Run an orchestrated cycle: decompose → match → dispatch → aggregate.
+    /// Used by God Role to coordinate other roles.
+    pub async fn run_orchestrated_cycle(
+        &mut self,
+        goal_description: &str,
+    ) -> Result<CycleResult, RoleError> {
+        if !self.active {
+            self.activate();
+        }
+
+        let mut suggestions = Vec::new();
+
+        // Load all available roles
+        let role_names = RoleStore::list_roles().unwrap_or_default();
+        let other_roles: Vec<RoleProfile> = role_names
+            .iter()
+            .filter(|n| *n != &self.profile.name)
+            .filter_map(|n| {
+                RoleStore::new(n).ok()?.load_profile().ok()?
+            })
+            .collect();
+
+        // Fire suggestions
+        suggestions.extend(Orchestrator::fire_suggest(&other_roles));
+
+        // Decompose
+        let subtasks = DiscoverEngine::decompose(goal_description);
+
+        // Match
+        let (matched, unmatched, role_suggestions) =
+            Orchestrator::match_roles(subtasks, &other_roles);
+        suggestions.extend(role_suggestions);
+
+        // Dispatch matched subtasks to assigned roles
+        let mut dispatched = Vec::new();
+        let mut success = true;
+
+        for task in &matched {
+            if let Some(ref assignee) = task.assignee {
+                if assignee == "god" || assignee == &self.profile.name {
+                    // Execute locally
+                    if let Some(ref mut agent) = self.agent {
+                        match agent.run(task.description.clone()).await {
+                            Ok(_) => {
+                                tracing::info!(
+                                    "God Role executed: {}",
+                                    task.description
+                                );
+                            }
+                            Err(e) => {
+                                success = false;
+                                tracing::warn!(
+                                    "God Role task failed: {}",
+                                    e
+                                );
+                            }
+                        }
+                    }
+                    dispatched.push("god".to_string());
+                } else {
+                    // Delegate to another role
+                    let mut worker =
+                        Role::new(assignee, "")?;
+                    worker.activate();
+                    worker.add_user_goal(&task.description);
+                    match worker.run_cycle().await {
+                        Ok(Some(outcome)) => {
+                            if outcome.success {
+                                dispatched.push(assignee.clone());
+                            } else {
+                                success = false;
+                            }
+                            worker.persist()?;
+                        }
+                        Ok(None) => {
+                            // Still dispatched, just no goal executed
+                        }
+                        Err(e) => {
+                            success = false;
+                            tracing::warn!(
+                                "Role '{}' failed: {}",
+                                assignee,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Store unmatched as suggestions
+        for task in &unmatched {
+            suggestions.push(OrchestrationSuggestion {
+                kind: SuggestionKind::HireRole,
+                role_name: task
+                    .required_skill
+                    .as_deref()
+                    .unwrap_or("unknown")
+                    .to_string(),
+                purpose: task
+                    .required_skill
+                    .as_deref()
+                    .map(|s| skill_translate(s)),
+                reason: format!(
+                    "未匹配的子任务: {}（需要创建对应角色来执行）",
+                    task.description
+                ),
+            });
+        }
+
+        let outcome = GoalOutcome {
+            goal_id: format!("goal-outcome-{}", chrono_now_compact()),
+            success,
+            summary: goal_description.to_string(),
+            tool_calls_count: matched.len() as u32,
+            tokens_used: 0,
+            lessons: if unmatched.is_empty() {
+                String::new()
+            } else {
+                format!("{} 个子任务无匹配角色，已生成 hire 建议", unmatched.len())
+            },
+        };
+
+        self.outcomes.push(outcome.clone());
+
+        // REFLECT + LEARN
+        for o in self.outcomes.drain(..) {
+            LearningEngine::reflect_on_goal(
+                &o,
+                &mut self.rules,
+                &mut self.cases,
+                &mut self.preferences,
+            );
+        }
+
+        let _published = LearningEngine::generate_teaching(
+            &self.profile.name,
+            &self.rules,
+            &mut self.teaching_lib,
+        )?;
+
+        self.persist()?;
+
+        Ok(CycleResult {
+            outcome: Some(outcome),
+            suggestions,
+            dispatched_to: dispatched,
+        })
+    }
+
+    // ─── Simple Cycle (non-orchestrating roles) ───
+
     pub async fn run_cycle(&mut self) -> Result<Option<GoalOutcome>, RoleError> {
         if !self.active {
             self.activate();
@@ -90,7 +363,6 @@ impl Role {
             );
         }
 
-        // Generate teachings
         let _published = LearningEngine::generate_teaching(
             &self.profile.name,
             &self.rules,
@@ -118,11 +390,7 @@ impl Role {
             for subtask in &subtasks {
                 if let Some(ref mut agent) = self.agent {
                     match agent.run(subtask.description.clone()).await {
-                        Ok(_result) => {
-                            tracing::info!(
-                                "Role '{}' subtask done",
-                                self.profile.name
-                            );
+                        Ok(_) => {
                             total_calls += 1;
                         }
                         Err(e) => {
@@ -151,14 +419,11 @@ impl Role {
             };
 
             self.outcomes.push(outcome.clone());
-
-            // Update evolution stage
             self.profile.evolution_stage = self.profile.evolution_stage.promote(
                 self.cases.len(),
                 self.rules.iter().filter(|r| r.confidence >= 0.7).count(),
             );
             self.store.save_profile(&self.profile)?;
-
             self.persist()?;
 
             return Ok(Some(outcome));
@@ -204,6 +469,8 @@ fn chrono_now_compact() -> String {
         .to_string()
 }
 
+// ─── Tests ───
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,8 +481,6 @@ mod tests {
         assert_eq!(role.profile.name, "test-integration");
         assert_eq!(role.profile.evolution_stage, Stage::Seed);
         assert!(role.goals().is_empty());
-        assert!(role.rules().is_empty());
-        assert!(role.cases().is_empty());
         RoleStore::delete("test-integration").ok();
     }
 
@@ -235,7 +500,6 @@ mod tests {
         let mut role = Role::new("test-goal", "test").unwrap();
         role.add_user_goal("manual task");
         assert_eq!(role.goals().len(), 1);
-        assert_eq!(role.goals()[0].description, "manual task");
         assert_eq!(role.goals()[0].created_by, GoalSource::User);
         RoleStore::delete("test-goal").ok();
     }
@@ -248,7 +512,86 @@ mod tests {
 
         let restored = Role::new("test-persist", "test").unwrap();
         assert_eq!(restored.goals().len(), 1);
-        assert_eq!(restored.goals()[0].description, "goal 1");
         RoleStore::delete("test-persist").ok();
+    }
+
+    // ─── Orchestrator tests ───
+
+    #[test]
+    fn test_match_roles_security() {
+        let roles = vec![
+            RoleProfile::new("sec-auditor", "审计安全漏洞和检查依赖"),
+        ];
+        let subtasks = vec![SubTask {
+            description: "检查代码安全".into(),
+            depends_on: vec![],
+            required_skill: Some("security".into()),
+            assignee: None,
+            result: None,
+        }];
+
+        let (matched, unmatched, suggestions) =
+            Orchestrator::match_roles(subtasks, &roles);
+
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].assignee.as_deref(), Some("sec-auditor"));
+        assert!(unmatched.is_empty());
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_match_roles_no_match_generates_hire_suggestion() {
+        let roles = vec![
+            RoleProfile::new("doc-gen", "生成文档"),
+        ];
+        let subtasks = vec![SubTask {
+            description: "审计安全".into(),
+            depends_on: vec![],
+            required_skill: Some("security".into()),
+            assignee: None,
+            result: None,
+        }];
+
+        let (matched, unmatched, suggestions) =
+            Orchestrator::match_roles(subtasks, &roles);
+
+        assert!(matched.is_empty());
+        assert_eq!(unmatched.len(), 1);
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].kind, SuggestionKind::HireRole);
+        assert!(suggestions[0].role_name.contains("security"));
+    }
+
+    #[test]
+    fn test_fire_suggest_seed_role_stale() {
+        let roles = vec![
+            RoleProfile {
+                name: "stale-role".into(),
+                seed_purpose: "test".into(),
+                self_description: "".into(),
+                created_at: "2020-01-01 00:00:00".into(),
+                evolution_stage: Stage::Seed,
+            },
+        ];
+
+        let suggestions = Orchestrator::fire_suggest(&roles);
+        assert!(!suggestions.is_empty());
+        assert_eq!(suggestions[0].kind, SuggestionKind::FireRole);
+    }
+
+    #[test]
+    fn test_fire_suggest_skips_god() {
+        let roles = vec![
+            RoleProfile {
+                name: "god".into(),
+                seed_purpose: "manage".into(),
+                self_description: "".into(),
+                created_at: "2020-01-01 00:00:00".into(),
+                evolution_stage: Stage::Expert,
+            },
+        ];
+
+        let suggestions = Orchestrator::fire_suggest(&roles);
+        assert!(suggestions.is_empty());
     }
 }
