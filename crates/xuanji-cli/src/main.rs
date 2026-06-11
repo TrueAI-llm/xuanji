@@ -226,6 +226,7 @@ async fn main() -> Result<()> {
                 &provider_config,
                 &config.agent,
                 &config.mcp_servers,
+                &config.trigger.workflows_dir,
             )
             .await?;
 
@@ -236,7 +237,12 @@ async fn main() -> Result<()> {
         (None, Some(Commands::Chat)) => {
             let (_, provider_config) = main_fns::get_default_provider(&config)?;
 
-            commands::agent::run_chat(&provider_config, &config.agent, &config.mcp_servers).await?;
+            commands::agent::run_chat(
+                &provider_config,
+                &config.agent,
+                &config.mcp_servers,
+                &config.trigger.workflows_dir,
+            ).await?;
         }
 
         // MCP list

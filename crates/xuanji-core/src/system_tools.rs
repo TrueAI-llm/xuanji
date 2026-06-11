@@ -11,6 +11,8 @@ use xuanji_llm::types::{LlmResponse, Message, ToolSchema};
 use xuanji_llm::LlmProvider;
 use xuanji_plugin::ToolRegistry;
 
+use crate::parser::parse_workflow;
+
 /// Wrapper to use `Arc<dyn LlmProvider>` as `Box<dyn LlmProvider>`.
 struct ArcProvider(Arc<dyn LlmProvider>);
 
@@ -206,5 +208,227 @@ async fn execute_agent_delegate(
                 is_error: true,
             })
         }
+    }
+}
+
+// ─── workflow.create system tool ───
+
+/// Schema for workflow.create tool
+pub const WORKFLOW_CREATE_SCHEMA: &str = r#"{
+    "type": "object",
+    "properties": {
+        "yaml": { "type": "string", "description": "Complete workflow YAML content. Must follow the xuanji workflow schema." },
+        "name": { "type": "string", "description": "Workflow filename without extension. Defaults to the 'name' field in YAML." }
+    },
+    "required": ["yaml"]
+}"#;
+
+/// Description for workflow.create — includes YAML format docs so the LLM knows the schema.
+const WORKFLOW_CREATE_DESC: &str = indoc::indoc! {"
+    Create a new workflow YAML file that can be executed by the xuanji daemon.
+
+    Use this tool when the user wants to set up:
+    - Scheduled/cron tasks (e.g. '每天早上9点执行报告')
+    - File watchers (e.g. '代码变更时自动测试')
+    - Webhook triggers (e.g. '接收GitHub webhook自动部署')
+
+    The 'yaml' parameter must be valid xuanji workflow YAML with this structure:
+
+    ```yaml
+    name: my-workflow           # Required: workflow name (used as filename)
+    description: \"...\"          # Optional: description
+    inputs:                     # Optional: input parameters
+      param1:
+        type: string
+        default: \"value\"
+    triggers:                   # Optional: automation triggers
+      - type: cron              # Scheduled execution
+        schedule: \"0 9 * * *\"   # 5-field cron expression (min hour day month weekday)
+      - type: file-watcher      # File change detection
+        paths: [\"src/\"]
+        events: [\"modified\"]
+      - type: webhook           # HTTP trigger
+        path: \"/deploy\"
+        method: \"POST\"
+    tasks:                      # Required: at least one task
+      task-name:
+        tool: llm.ask           # Tool to call (llm.ask, shell.run, agent.delegate, etc.)
+        arguments:
+          prompt: \"Task description\"
+        depends_on: []          # Optional: list of task names this depends on
+        timeout: \"60s\"          # Optional
+        retry:                  # Optional
+          max_attempts: 3
+          delay: \"5s\"
+    ```
+
+    Template variables available in arguments: ${{ inputs.X }}, ${{ tasks.X.output }}, ${{ env.X }}, ${{ trigger.X }}
+    After creation, the daemon must be restarted to pick up new workflows.
+"};
+
+/// Register workflow.create system tool.
+///
+/// Allows agents to create workflow YAML files in the configured workflows directory.
+pub fn register_workflow_create(
+    registry: &mut ToolRegistry,
+    workflows_dir: String,
+) {
+    registry.register_system_tool(
+        "workflow.create",
+        WORKFLOW_CREATE_DESC,
+        serde_json::from_str(WORKFLOW_CREATE_SCHEMA).unwrap_or_default(),
+        move |args: serde_json::Value| {
+            let workflows_dir = workflows_dir.clone();
+            Box::pin(async move {
+                execute_workflow_create(args, &workflows_dir).await
+            })
+        },
+    );
+}
+
+async fn execute_workflow_create(
+    arguments: serde_json::Value,
+    workflows_dir: &str,
+) -> Result<xuanji_plugin::client::McpToolResult, xuanji_plugin::PluginError> {
+    let yaml_str = arguments
+        .get("yaml")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| xuanji_plugin::PluginError::Protocol(
+            "workflow.create: missing 'yaml' field".into(),
+        ))?;
+
+    // Validate the YAML by parsing it
+    let workflow = parse_workflow(yaml_str)
+        .map_err(|e| xuanji_plugin::PluginError::Protocol(
+            format!("workflow.create: invalid workflow YAML: {}", e),
+        ))?;
+
+    // Determine filename
+    let name = arguments
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| workflow.name.clone());
+
+    // Ensure workflows directory exists
+    std::fs::create_dir_all(workflows_dir)
+        .map_err(|e| xuanji_plugin::PluginError::Protocol(
+            format!("workflow.create: cannot create dir '{}': {}", workflows_dir, e),
+        ))?;
+
+    // Write the YAML file
+    let file_path = std::path::Path::new(workflows_dir).join(format!("{}.yaml", name));
+    std::fs::write(&file_path, yaml_str)
+        .map_err(|e| xuanji_plugin::PluginError::Protocol(
+            format!("workflow.create: cannot write '{}': {}", file_path.display(), e),
+        ))?;
+
+    tracing::info!("Created workflow '{}' at {}", name, file_path.display());
+
+    Ok(xuanji_plugin::client::McpToolResult {
+        content: serde_json::json!([{
+            "type": "text",
+            "text": format!(
+                "✅ 工作流 '{}' 已创建: {}\n如需自动执行，请运行 `xuanji daemon start`（或重启 daemon）。",
+                name,
+                file_path.display()
+            )
+        }]),
+        is_error: false,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_workflow_create_valid_yaml() {
+        let dir = TempDir::new().unwrap();
+        let dir_path = dir.path().to_str().unwrap().to_string();
+
+        let mut registry = ToolRegistry::new();
+        register_workflow_create(&mut registry, dir_path.clone());
+
+        let yaml = r#"name: test-workflow
+tasks:
+  greet:
+    tool: llm.ask
+    arguments:
+      prompt: "Hello"
+"#;
+        let args = serde_json::json!({ "yaml": yaml });
+        let result = registry.call_tool("workflow.create", args).await.unwrap();
+        assert!(!result.is_error);
+
+        // Verify file was created
+        let content = std::fs::read_to_string(dir.path().join("test-workflow.yaml")).unwrap();
+        assert!(content.contains("test-workflow"));
+    }
+
+    #[tokio::test]
+    async fn test_workflow_create_invalid_yaml() {
+        let dir = TempDir::new().unwrap();
+        let dir_path = dir.path().to_str().unwrap().to_string();
+
+        let mut registry = ToolRegistry::new();
+        register_workflow_create(&mut registry, dir_path);
+
+        // YAML that parses but has no tasks (should fail validation)
+        let yaml = "name: bad-workflow\ndescription: no tasks";
+        let args = serde_json::json!({ "yaml": yaml });
+        let result = registry.call_tool("workflow.create", args).await;
+        assert!(result.is_err(), "Expected error for invalid workflow YAML");
+    }
+
+    #[tokio::test]
+    async fn test_workflow_create_custom_name() {
+        let dir = TempDir::new().unwrap();
+        let dir_path = dir.path().to_str().unwrap().to_string();
+
+        let mut registry = ToolRegistry::new();
+        register_workflow_create(&mut registry, dir_path);
+
+        let yaml = r#"name: original-name
+tasks:
+  task1:
+    tool: llm.ask
+    arguments:
+      prompt: "test"
+"#;
+        let args = serde_json::json!({ "yaml": yaml, "name": "custom-name" });
+        let result = registry.call_tool("workflow.create", args).await.unwrap();
+        assert!(!result.is_error);
+
+        // Should use custom name
+        assert!(dir.path().join("custom-name.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn test_workflow_create_with_cron_trigger() {
+        let dir = TempDir::new().unwrap();
+        let dir_path = dir.path().to_str().unwrap().to_string();
+
+        let mut registry = ToolRegistry::new();
+        register_workflow_create(&mut registry, dir_path);
+
+        let yaml = r#"name: daily-report
+triggers:
+  - type: cron
+    schedule: "0 9 * * *"
+tasks:
+  report:
+    tool: llm.ask
+    arguments:
+      prompt: "Generate daily report"
+"#;
+        let args = serde_json::json!({ "yaml": yaml });
+        let result = registry.call_tool("workflow.create", args).await.unwrap();
+        assert!(!result.is_error);
+
+        let content = std::fs::read_to_string(dir.path().join("daily-report.yaml")).unwrap();
+        assert!(content.contains("cron"));
+        assert!(content.contains("0 9 * * *"));
     }
 }
