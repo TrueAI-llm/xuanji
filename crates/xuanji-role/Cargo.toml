@@ -1,0 +1,24 @@
+[package]
+name = "xuanji-role"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chrono = "0.4"
+toml = "0.8"
+dirs = "6"
+xuanji-llm = { path = "../xuanji-llm" }
+xuanji-agent = { path = "../xuanji-agent" }
+xuanji-plugin = { path = "../xuanji-plugin" }
+xuanji-memory = { path = "../xuanji-memory" }
+xuanji-bus = { path = "../xuanji-bus" }
+xuanji-budget = { path = "../xuanji-budget" }
+
+[dev-dependencies]
+tempfile = "3"

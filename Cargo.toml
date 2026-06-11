@@ -10,6 +10,7 @@ members = [
     "crates/xuanji-trigger",
     "crates/xuanji-bus",
     "crates/xuanji-budget",
+    "crates/xuanji-role",
 ]
 
 [workspace.package]
