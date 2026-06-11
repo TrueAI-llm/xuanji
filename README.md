@@ -18,9 +18,33 @@ AI 驱动的通用自动化平台 CLI 工具。
 - **多提供商** — 支持 OpenAI、Anthropic 协议及所有兼容 API
 - **内置 Shell** — `shell.run` 系统工具，无需外部 MCP 即可执行命令（开箱即用）
 
-## 快速开始
+## 安装
 
-### 安装
+### 一键安装 (Linux / macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TrueAI-llm/xuanji/master/install.sh | sh
+```
+
+指定安装目录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TrueAI-llm/xuanji/master/install.sh | sh -s -- --bin-dir /usr/local/bin
+```
+
+### 从 GitHub Releases 下载
+
+前往 [Releases 页面](https://github.com/TrueAI-llm/xuanji/releases) 下载对应平台的预编译二进制：
+
+| 平台 | 文件 |
+|------|------|
+| Linux x86_64 | `xuanji-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux ARM64 | `xuanji-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Intel | `xuanji-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `xuanji-aarch64-apple-darwin.tar.gz` |
+| Windows | `xuanji-x86_64-pc-windows-msvc.zip` |
+
+### 从源码构建
 
 ```bash
 git clone https://github.com/TrueAI-llm/xuanji.git
@@ -28,6 +52,18 @@ cd xuanji
 cargo build --release
 # 二进制文件在 target/release/xuanji
 ```
+
+### 开机自启
+
+```bash
+# 安装为系统服务（Linux: systemd, macOS: launchd）
+xuanji daemon install
+
+# 卸载服务
+xuanji daemon uninstall
+```
+
+## 快速开始
 
 ### 初始化
 
@@ -69,6 +105,8 @@ xuanji mcp list
 | `xuanji daemon start` | 启动守护进程 |
 | `xuanji daemon status` | 查看守护进程状态 |
 | `xuanji daemon stop` | 停止守护进程 |
+| `xuanji daemon install` | 安装为系统服务（开机自启） |
+| `xuanji daemon uninstall` | 卸载系统服务 |
 | `xuanji memory show` | 查看项目记忆 |
 | `xuanji memory clear` | 清除项目记忆 |
 | `xuanji memory rule <text>` | 添加自定义规则 |

@@ -156,6 +156,186 @@ pub fn status_daemon() -> Result<()> {
     Ok(())
 }
 
+/// Install daemon as a system service for auto-start on boot.
+pub fn install_daemon() -> Result<()> {
+    let exe = std::env::current_exe().context("Cannot determine current executable")?;
+    let exe_str = exe.to_str().context("Executable path is not valid UTF-8")?;
+    let pid_path = pid_file_path();
+    let log_path = log_file_path();
+
+    // Ensure directories exist
+    std::fs::create_dir_all(xuanji_home())?;
+    std::fs::create_dir_all(xuanji_home().join("workflows"))?;
+
+    if cfg!(target_os = "linux") {
+        install_systemd(exe_str, &pid_path, &log_path)
+    } else if cfg!(target_os = "macos") {
+        install_launchd(exe_str, &pid_path, &log_path)
+    } else {
+        anyhow::bail!("daemon install is only supported on Linux and macOS");
+    }
+}
+
+/// Uninstall daemon system service.
+pub fn uninstall_daemon() -> Result<()> {
+    if cfg!(target_os = "linux") {
+        uninstall_systemd()
+    } else if cfg!(target_os = "macos") {
+        uninstall_launchd()
+    } else {
+        anyhow::bail!("daemon uninstall is only supported on Linux and macOS");
+    }
+}
+
+// ─── Linux: systemd user service ───
+
+fn systemd_service_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config")
+        .join("systemd")
+        .join("user")
+        .join("xuanji.service")
+}
+
+fn install_systemd(exe: &str, pid_path: &PathBuf, log_path: &PathBuf) -> Result<()> {
+    let service_path = systemd_service_path();
+    let service_dir = service_path.parent().unwrap();
+    std::fs::create_dir_all(service_dir)?;
+
+    let service_content = format!(
+        "[Unit]\n\
+         Description=xuanji daemon\n\
+         After=network.target\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart={exe} _daemon_run --pid-file {pid} --log-file {log}\n\
+         Restart=on-failure\n\
+         RestartSec=5\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n",
+        exe = exe,
+        pid = pid_path.display(),
+        log = log_path.display(),
+    );
+
+    std::fs::write(&service_path, &service_content)?;
+    println!("Written service file: {}", service_path.display());
+
+    // Reload and enable
+    let _ = run_cmd("systemctl", &["--user", "daemon-reload"]);
+    let _ = run_cmd("systemctl", &["--user", "enable", "xuanji"]);
+    let _ = run_cmd("systemctl", &["--user", "start", "xuanji"]);
+
+    println!();
+    println!("✅ xuanji daemon installed as systemd user service");
+    println!("   systemctl --user status xuanji");
+    println!("   systemctl --user stop xuanji");
+    println!("   systemctl --user start xuanji");
+    Ok(())
+}
+
+fn uninstall_systemd() -> Result<()> {
+    let service_path = systemd_service_path();
+
+    if !service_path.exists() {
+        println!("xuanji service is not installed");
+        return Ok(());
+    }
+
+    let _ = run_cmd("systemctl", &["--user", "stop", "xuanji"]);
+    let _ = run_cmd("systemctl", &["--user", "disable", "xuanji"]);
+
+    std::fs::remove_file(&service_path)?;
+    let _ = run_cmd("systemctl", &["--user", "daemon-reload"]);
+
+    println!("✅ xuanji daemon service uninstalled");
+    Ok(())
+}
+
+// ─── macOS: launchd plist ───
+
+fn launchd_plist_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Library")
+        .join("LaunchAgents")
+        .join("com.trueai.xuanji.plist")
+}
+
+fn install_launchd(exe: &str, pid_path: &PathBuf, log_path: &PathBuf) -> Result<()> {
+    let plist_path = launchd_plist_path();
+    let plist_dir = plist_path.parent().unwrap();
+    std::fs::create_dir_all(plist_dir)?;
+
+    let plist_content = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n\
+           <key>Label</key><string>com.trueai.xuanji</string>\n\
+           <key>ProgramArguments</key>\n\
+           <array>\n\
+             <string>{exe}</string>\n\
+             <string>_daemon_run</string>\n\
+             <string>--pid-file</string><string>{pid}</string>\n\
+             <string>--log-file</string><string>{log}</string>\n\
+           </array>\n\
+           <key>RunAtLoad</key><true/>\n\
+           <key>KeepAlive</key><true/>\n\
+           <key>StandardOutPath</key><string>{log}</string>\n\
+           <key>StandardErrorPath</key><string>{log}</string>\n\
+         </dict>\n\
+         </plist>\n",
+        exe = exe,
+        pid = pid_path.display(),
+        log = log_path.display(),
+    );
+
+    std::fs::write(&plist_path, &plist_content)?;
+    println!("Written plist: {}", plist_path.display());
+
+    // Load the plist
+    let _ = run_cmd("launchctl", &["load", plist_path.to_str().unwrap()]);
+
+    println!();
+    println!("✅ xuanji daemon installed as launchd service");
+    println!("   launchctl list | grep xuanji");
+    println!("   launchctl unload {}", plist_path.display());
+    Ok(())
+}
+
+fn uninstall_launchd() -> Result<()> {
+    let plist_path = launchd_plist_path();
+
+    if !plist_path.exists() {
+        println!("xuanji service is not installed");
+        return Ok(());
+    }
+
+    let _ = run_cmd("launchctl", &["unload", plist_path.to_str().unwrap()]);
+
+    std::fs::remove_file(&plist_path)?;
+
+    println!("✅ xuanji daemon service uninstalled");
+    Ok(())
+}
+
+// ─── Helper ───
+
+fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
+    let status = std::process::Command::new(program)
+        .args(args)
+        .status()
+        .context(format!("Failed to run {} {}", program, args.join(" ")))?;
+    if !status.success() {
+        anyhow::bail!("{} {} failed with {}", program, args.join(" "), status);
+    }
+    Ok(())
+}
+
 /// Run the daemon process (called from the spawned child).
 pub async fn run_daemon(pid_file: &str, log_file: &str) -> Result<()> {
     // Write PID file

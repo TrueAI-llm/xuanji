@@ -93,6 +93,10 @@ enum DaemonAction {
     Status,
     /// Stop the daemon process
     Stop,
+    /// Install daemon as system service (auto-start on boot)
+    Install,
+    /// Uninstall daemon system service
+    Uninstall,
 }
 
 #[derive(clap::Subcommand)]
@@ -354,6 +358,16 @@ confirm_risky = true
         // Daemon stop
         (None, Some(Commands::Daemon { action: DaemonAction::Stop })) => {
             commands::daemon::stop_daemon()?;
+        }
+
+        // Daemon install
+        (None, Some(Commands::Daemon { action: DaemonAction::Install })) => {
+            commands::daemon::install_daemon()?;
+        }
+
+        // Daemon uninstall
+        (None, Some(Commands::Daemon { action: DaemonAction::Uninstall })) => {
+            commands::daemon::uninstall_daemon()?;
         }
 
         // Memory show
