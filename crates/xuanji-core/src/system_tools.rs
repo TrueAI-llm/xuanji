@@ -44,6 +44,15 @@ pub const LLM_ASK_SCHEMA: &str = r#"{
     "required": ["prompt"]
 }"#;
 
+/// Schema for shell.run tool (built-in)
+pub const SHELL_RUN_SCHEMA: &str = r#"{
+    "type": "object",
+    "properties": {
+        "command": { "type": "string", "description": "The shell command to execute" }
+    },
+    "required": ["command"]
+}"#;
+
 /// Schema for agent.delegate tool
 pub const AGENT_DELEGATE_SCHEMA: &str = r#"{
     "type": "object",
@@ -54,7 +63,7 @@ pub const AGENT_DELEGATE_SCHEMA: &str = r#"{
     "required": ["task"]
 }"#;
 
-/// Register system tools (llm.ask) with the tool registry.
+/// Register system tools (llm.ask, shell.run) with the tool registry.
 pub fn register_system_tools(
     registry: &mut ToolRegistry,
     provider: Arc<dyn LlmProvider>,
@@ -69,6 +78,24 @@ pub fn register_system_tools(
             let provider = provider_clone.clone();
             Box::pin(async move {
                 execute_llm_ask(args, &*provider).await
+            })
+        },
+    );
+
+    // Built-in shell.run — always available without external MCP server
+    register_shell_run(registry);
+}
+
+/// Register only the built-in shell.run tool (no provider needed).
+/// Use this in agent/chat mode where llm.ask isn't needed.
+pub fn register_shell_run(registry: &mut ToolRegistry) {
+    registry.register_system_tool(
+        "shell.run",
+        "Execute a shell command and return its output. Use this for running CLI commands, scripts, and any system operations.",
+        serde_json::from_str(SHELL_RUN_SCHEMA).unwrap_or_default(),
+        |args: serde_json::Value| {
+            Box::pin(async move {
+                execute_shell_run(args).await
             })
         },
     );
@@ -140,6 +167,50 @@ async fn execute_llm_ask(
     Ok(xuanji_plugin::client::McpToolResult {
         content: serde_json::json!([{ "type": "text", "text": text }]),
         is_error: false,
+    })
+}
+
+/// Built-in shell.run — executes a command via `sh -c`.
+async fn execute_shell_run(
+    arguments: serde_json::Value,
+) -> Result<xuanji_plugin::client::McpToolResult, xuanji_plugin::PluginError> {
+    let command = arguments
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| xuanji_plugin::PluginError::Protocol(
+            "shell.run: missing 'command' field".into(),
+        ))?;
+
+    tracing::info!("shell.run: {}", command);
+
+    let output = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output()
+        .await
+        .map_err(|e| xuanji_plugin::PluginError::Protocol(
+            format!("shell.run: failed to execute: {}", e),
+        ))?;
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
+    let is_error = !output.status.success();
+
+    let mut content = vec![serde_json::json!({
+        "type": "text",
+        "text": if stdout_str.is_empty() { stderr_str.clone() } else { stdout_str },
+    })];
+
+    if !stderr_str.is_empty() && is_error {
+        content.push(serde_json::json!({
+            "type": "text",
+            "text": format!("stderr: {}", stderr_str),
+        }));
+    }
+
+    Ok(xuanji_plugin::client::McpToolResult {
+        content: serde_json::json!(content),
+        is_error,
     })
 }
 

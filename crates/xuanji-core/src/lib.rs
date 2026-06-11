@@ -10,6 +10,7 @@ pub use error::CoreError;
 pub use parser::parse_workflow;
 pub use scheduler::DagScheduler;
 pub use system_tools::register_agent_delegate;
+pub use system_tools::register_shell_run;
 pub use system_tools::register_system_tools;
 pub use system_tools::register_workflow_create;
 pub use types::*;
