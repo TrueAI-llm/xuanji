@@ -1,7 +1,9 @@
 pub mod agent;
 pub mod daemon;
+pub mod god;
 pub mod init;
 pub mod mcp;
 pub mod memory;
+pub mod role;
 pub mod swarm;
 pub mod workflow;

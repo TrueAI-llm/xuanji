@@ -17,7 +17,7 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Commands {
-    /// Interactive multi-turn agent chat
+    /// Interactive multi-turn agent chat (powered by God Role)
     Chat,
 
     /// MCP server management
@@ -70,6 +70,12 @@ enum Commands {
 
     /// Show budget configuration
     Budget,
+
+    /// Role management (hire, fire, list, show, activate, evolve)
+    Role {
+        #[command(subcommand)]
+        action: RoleAction,
+    },
 
     /// Internal: run the daemon process (hidden)
     #[command(hide = true)]
@@ -172,6 +178,40 @@ enum McpAction {
     },
 }
 
+#[derive(clap::Subcommand)]
+pub enum RoleAction {
+    /// Create a new role
+    Hire {
+        /// Role name
+        name: String,
+        /// Role purpose (seed direction)
+        #[arg(long)]
+        purpose: String,
+    },
+    /// Destroy a role
+    Fire {
+        name: String,
+    },
+    /// List all roles
+    List,
+    /// Show role details
+    Show {
+        name: String,
+    },
+    /// Activate role self-direction loop
+    Activate {
+        name: String,
+    },
+    /// Chat with a specific role
+    Chat {
+        name: String,
+    },
+    /// Trigger deep reflection cycle
+    Evolve {
+        name: String,
+    },
+}
+
 fn parse_key_value(s: &str) -> Result<String, String> {
     if s.contains('=') {
         Ok(s.to_string())
@@ -228,32 +268,14 @@ async fn main() -> Result<()> {
     });
 
     match (cli.prompt, cli.command) {
-        // Agent mode: xuanji "task description"
+        // Agent mode: xuanji "task description" -> God Role
         (Some(prompt), None) => {
-            let (_, provider_config) = main_fns::get_default_provider(&config)?;
-
-            let result = commands::agent::run_agent(
-                &prompt,
-                &provider_config,
-                &config.agent,
-                &config.mcp_servers,
-                &config.trigger.workflows_dir,
-            )
-            .await?;
-
-            commands::agent::render_markdown(&result);
+            commands::god::run_prompt(&prompt).await?;
         }
 
-        // Chat mode: xuanji chat
+        // Chat mode: xuanji chat -> God Role chat
         (None, Some(Commands::Chat)) => {
-            let (_, provider_config) = main_fns::get_default_provider(&config)?;
-
-            commands::agent::run_chat(
-                &provider_config,
-                &config.agent,
-                &config.mcp_servers,
-                &config.trigger.workflows_dir,
-            ).await?;
+            commands::god::run_chat().await?;
         }
 
         // MCP list
@@ -414,6 +436,11 @@ confirm_risky = true
             Some(Commands::DaemonRun { pid_file, log_file }),
         ) => {
             commands::daemon::run_daemon(&pid_file, &log_file).await?;
+        }
+
+        // Role management
+        (None, Some(Commands::Role { action })) => {
+            commands::role::handle_role(&action).await?;
         }
 
         // No args - show help

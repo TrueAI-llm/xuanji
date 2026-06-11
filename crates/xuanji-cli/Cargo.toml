@@ -26,5 +26,6 @@ xuanji-core = { path = "../xuanji-core" }
 xuanji-trigger = { path = "../xuanji-trigger" }
 xuanji-bus = { path = "../xuanji-bus" }
 xuanji-budget = { path = "../xuanji-budget" }
+xuanji-role = { path = "../xuanji-role" }
 libc = "0.2"
 termimad = "0.31"

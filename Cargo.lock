@@ -2837,6 +2837,7 @@ dependencies = [
  "xuanji-llm",
  "xuanji-memory",
  "xuanji-plugin",
+ "xuanji-role",
  "xuanji-trigger",
 ]
 
@@ -2906,6 +2907,28 @@ dependencies = [
  "tokio",
  "tracing",
  "xuanji-llm",
+]
+
+[[package]]
+name = "xuanji-role"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tracing",
+ "xuanji-agent",
+ "xuanji-budget",
+ "xuanji-bus",
+ "xuanji-llm",
+ "xuanji-memory",
+ "xuanji-plugin",
 ]
 
 [[package]]

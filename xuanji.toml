@@ -15,10 +15,6 @@ risky_patterns = []
 text_tool_mode = false
 
 [[mcp_server]]
-name = "shell"
-command = "target/debug/xuanji-mcp-shell"
-
-[[mcp_server]]
 name = "akshare-one-mcp"
 command = "uvx"
 args = ["akshare-one-mcp"]
@@ -33,11 +29,8 @@ args = [
 
 [[mcp_server]]
 name = "china-stock-mcp"
-command = "npx"
-args = [
-    "-y",
-    "xinkuang/china-stock-mcp",
-]
+command = "uvx"
+args = ["china-stock-mcp"]
 
 [trigger]
 webhook_port = 9090
