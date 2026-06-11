@@ -69,9 +69,17 @@ jobs:
         if: '!matrix.cross'
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Unix)
-        if: runner.os != 'Windows'
+      - name: Install cross-toolchain (aarch64)
+        if: matrix.cross
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Strip binary (native)
+        if: runner.os != 'Windows' && '!matrix.cross'
         run: strip target/${{ matrix.target }}/release/xuanji
+
+      - name: Strip binary (cross aarch64)
+        if: matrix.cross
+        run: aarch64-linux-gnu-strip target/${{ matrix.target }}/release/xuanji
 
       - name: Package (tar.gz)
         if: matrix.ext == 'tar.gz'
