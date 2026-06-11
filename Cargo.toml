@@ -6,7 +6,6 @@ members = [
     "crates/xuanji-agent",
     "crates/xuanji-memory",
     "crates/xuanji-cli",
-    "plugins/xuanji-mcp-shell",
     "crates/xuanji-core",
     "crates/xuanji-trigger",
     "crates/xuanji-bus",

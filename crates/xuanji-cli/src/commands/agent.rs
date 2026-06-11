@@ -29,7 +29,8 @@ pub async fn run_agent(
     let provider = create_provider(provider_config)?;
     let mut registry = create_registry(mcp_servers).await?;
 
-    // Register workflow.create system tool
+    // Register built-in system tools
+    xuanji_core::register_shell_run(&mut registry);
     xuanji_core::register_workflow_create(&mut registry, workflows_dir.to_string());
 
     let mut agent = Agent::new(provider, registry, agent_config.clone());
@@ -53,7 +54,8 @@ pub async fn run_chat(
     let provider = create_provider(provider_config)?;
     let mut registry = create_registry(mcp_servers).await?;
 
-    // Register workflow.create system tool
+    // Register built-in system tools
+    xuanji_core::register_shell_run(&mut registry);
     xuanji_core::register_workflow_create(&mut registry, workflows_dir.to_string());
 
     println!("xuanji chat (type 'exit' to quit)\n");

@@ -8,7 +8,6 @@ use xuanji_budget::BudgetConfig;
 use xuanji_llm::config::{LlmConfig, ProviderConfig};
 use xuanji_llm::protocol::Protocol;
 use xuanji_memory::MemoryConfig;
-use xuanji_plugin::types::McpServerConfig;
 use xuanji_trigger::TriggerConfig;
 
 struct ProviderPreset {
@@ -109,10 +108,7 @@ pub fn run_init(global: bool) -> Result<()> {
 
     println!();
 
-    // 2. MCP servers
-    let add_shell = prompt_yes_no("添加内置 Shell 工具 (shell.run)?", true)?;
-
-    // 3. Build config
+    // 2. Build config
     let mut providers = HashMap::new();
     providers.insert(
         provider_name.clone(),
@@ -126,23 +122,13 @@ pub fn run_init(global: bool) -> Result<()> {
         },
     );
 
-    let mut mcp_servers = Vec::new();
-    if add_shell {
-        mcp_servers.push(McpServerConfig {
-            name: "shell".to_string(),
-            command: "xuanji-mcp-shell".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-        });
-    }
-
     let config = XuanjiConfig {
         llm: LlmConfig {
             default_provider: Some(provider_name.clone()),
             providers,
         },
         agent: AgentConfig::default(),
-        mcp_servers,
+        mcp_servers: vec![],
         trigger: TriggerConfig::default(),
         memory: MemoryConfig::default(),
         budget: BudgetConfig::default(),

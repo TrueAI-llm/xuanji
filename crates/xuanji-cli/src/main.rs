@@ -319,10 +319,6 @@ base_url = "https://api.deepseek.com/v1"
 [agent]
 max_loops = 20
 confirm_risky = true
-
-[[mcp_server]]
-name = "shell"
-command = "xuanji-mcp-shell"
 "#;
             std::fs::write("xuanji.toml", example)?;
             println!("Created xuanji.toml");

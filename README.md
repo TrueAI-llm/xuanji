@@ -16,7 +16,7 @@ AI 驱动的通用自动化平台 CLI 工具。
 - **三层记忆** — 短期（对话历史）、工作记忆（子任务追踪）、长期（项目知识持久化）
 - **触发系统** — Cron 定时任务、文件监控、Webhook，守护进程模式运行
 - **多提供商** — 支持 OpenAI、Anthropic 协议及所有兼容 API
-- **内置 Shell** — `shell.run` 系统工具，无需外部 MCP 即可执行命令
+- **内置 Shell** — `shell.run` 系统工具，无需外部 MCP 即可执行命令（开箱即用）
 
 ## 快速开始
 
@@ -105,10 +105,6 @@ api_key = "${ANTHROPIC_API_KEY}"
 max_loops = 20
 step_timeout = "60s"
 confirm_risky = true
-
-[[mcp_server]]
-name = "shell"
-command = "xuanji-mcp-shell"
 
 [[mcp_server]]
 name = "playwright"
@@ -241,11 +237,8 @@ xuanji-cli
 │                 ├── xuanji-memory     (三层记忆系统)
 │                 ├── xuanji-bus        (Agent 间通信)
 │                 └── xuanji-budget     (Token 预算控制)
-├── xuanji-core ─── (DAG 工作流引擎、系统工具)
+├── xuanji-core ─── (DAG 工作流引擎、内置 shell.run)
 └── xuanji-trigger ─ (Cron、文件监控、Webhook)
-
-plugins/
-└── xuanji-mcp-shell  (内置 Shell MCP 服务器)
 ```
 
 ## 开发
@@ -266,7 +259,7 @@ cargo run --bin xuanji -- --help
 ```
 crates/
 ├── xuanji-cli/        CLI 入口，命令分发
-├── xuanji-core/       工作流引擎，系统工具
+├── xuanji-core/       工作流引擎，系统工具（内置 shell.run）
 ├── xuanji-llm/        LLM 提供商抽象
 ├── xuanji-agent/      Agent 循环，工具调用
 ├── xuanji-plugin/     MCP 客户端，工具注册
@@ -274,8 +267,6 @@ crates/
 ├── xuanji-trigger/    触发器系统
 ├── xuanji-bus/        Agent 间通信
 └── xuanji-budget/     预算控制
-plugins/
-└── xuanji-mcp-shell/  内置 Shell 工具
 examples/              工作流 YAML 示例
 ```
 
