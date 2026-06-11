@@ -118,13 +118,9 @@ pub fn install_server(
     global: bool,
 ) -> Result<()> {
     let package_type = detect_package_type(package, type_override);
-    let server_name = name_override.unwrap_or_else(|| {
-        // Extract short name from scoped package: @scope/pkg → pkg
-        package
-            .split('/')
-            .last()
-            .unwrap_or(package)
-    });
+    let server_name = name_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| derive_server_name(package));
 
     let (command, args) = match package_type {
         PackageType::Npm => ("npx".to_string(), vec!["-y".to_string(), package.to_string()]),
@@ -183,6 +179,18 @@ pub fn install_server(
 enum PackageType {
     Npm,
     Python,
+}
+
+/// Derive a server name from a package identifier.
+/// - `@scope/pkg` → `scope` (use scope name, not generic "pkg")
+/// - `pkg-name` → `pkg-name`
+fn derive_server_name(package: &str) -> String {
+    if let Some(rest) = package.strip_prefix('@') {
+        // Scoped npm package: @scope/pkg → scope
+        rest.split('/').next().unwrap_or(rest).to_string()
+    } else {
+        package.to_string()
+    }
 }
 
 fn detect_package_type(package: &str, type_override: Option<&str>) -> PackageType {
