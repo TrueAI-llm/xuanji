@@ -134,9 +134,9 @@ enum McpAction {
         #[arg(long, value_parser = parse_key_value)]
         env: Vec<String>,
 
-        /// Save to global config (~/.xuanji/config.toml) instead of local
+        /// Save to project-local ./xuanji.toml instead of global
         #[arg(long)]
-        global: bool,
+        local: bool,
     },
 
     /// Install an MCP server from a package identifier
@@ -156,9 +156,9 @@ enum McpAction {
         #[arg(long, value_parser = parse_key_value)]
         env: Vec<String>,
 
-        /// Save to global config instead of local
+        /// Save to project-local ./xuanji.toml instead of global
         #[arg(long)]
-        global: bool,
+        local: bool,
     },
 
     /// Remove an MCP server from the config
@@ -166,9 +166,9 @@ enum McpAction {
         /// Name of the server to remove
         name: String,
 
-        /// Remove from global config instead of local
+        /// Remove from project-local config instead of global
         #[arg(long)]
-        global: bool,
+        local: bool,
     },
 }
 
@@ -265,10 +265,10 @@ async fn main() -> Result<()> {
         (
             None,
             Some(Commands::Mcp {
-                action: McpAction::Add { name, command, args, env, global },
+                action: McpAction::Add { name, command, args, env, local },
             }),
         ) => {
-            commands::mcp::add_server(&name, &command, &args, &env, global)?;
+            commands::mcp::add_server(&name, &command, &args, &env, !local)?;
         }
 
         // MCP install
@@ -281,7 +281,7 @@ async fn main() -> Result<()> {
                         name,
                         r#type,
                         env,
-                        global,
+                        local,
                     },
             }),
         ) => {
@@ -290,7 +290,7 @@ async fn main() -> Result<()> {
                 name.as_deref(),
                 r#type.as_deref(),
                 &env,
-                global,
+                !local,
             )?;
         }
 
@@ -298,10 +298,10 @@ async fn main() -> Result<()> {
         (
             None,
             Some(Commands::Mcp {
-                action: McpAction::Remove { name, global },
+                action: McpAction::Remove { name, local },
             }),
         ) => {
-            commands::mcp::remove_server(&name, global)?;
+            commands::mcp::remove_server(&name, !local)?;
         }
 
         // Config init (non-interactive template)

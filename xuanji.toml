@@ -30,3 +30,24 @@ args = [
     "-y",
     "@playwright/mcp",
 ]
+
+[[mcp_server]]
+name = "china-stock-mcp"
+command = "npx"
+args = [
+    "-y",
+    "xinkuang/china-stock-mcp",
+]
+
+[trigger]
+webhook_port = 9090
+workflows_dir = "/home/gaochao/.xuanji/workflows"
+
+[memory]
+max_history = 100
+max_context_turns = 20
+
+[budget]
+total_budget = 0
+per_agent_budget = 0
+max_depth = 3
