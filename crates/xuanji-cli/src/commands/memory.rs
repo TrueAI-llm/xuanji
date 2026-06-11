@@ -1,36 +1,47 @@
 use anyhow::Result;
-use xuanji_memory::LongTermMemory;
+use xuanji_role::{Role, RoleStore, Rule};
 
-/// Show current project memory.
+/// Memory commands now operate on the active role's RoleStore (default: `god`),
+/// replacing the old project-scoped LongTermMemory on the role path.
+
+const ACTIVE_ROLE: &str = "god";
+
+/// Show accumulated knowledge (context, rules, cases, teachings) for the active role.
 pub fn show_memory() -> Result<()> {
-    let memory = LongTermMemory::default_path()?;
-    let cwd = std::env::current_dir()?;
-    let content = memory.load_for_project(&cwd)?;
-
-    let prompt = LongTermMemory::to_prompt_context(&content);
-    if prompt.is_empty() {
-        println!("No memory found for current project.");
-        println!("Memory will be built automatically as you use xuanji.");
+    let role = Role::new(ACTIVE_ROLE, "")?;
+    let ctx = role.render_context();
+    if ctx.trim().is_empty() {
+        println!("角色 {} 暂无累积记忆。", ACTIVE_ROLE);
     } else {
-        println!("{}", prompt);
+        println!("{}", ctx);
     }
-
     Ok(())
 }
 
-/// Clear all memory for the current project.
+/// Clear the active role's learned rules/cases/preferences (profile is kept).
 pub fn clear_memory() -> Result<()> {
-    let memory = LongTermMemory::default_path()?;
-    let cwd = std::env::current_dir()?;
-    memory.clear_project(&cwd)?;
-    println!("✅ Project memory cleared");
+    let store = RoleStore::new(ACTIVE_ROLE)?;
+    store.save_rules(&[])?;
+    store.save_cases(&[])?;
+    store.save_preferences(&std::collections::HashMap::new())?;
+    println!("ok 已清空角色 {} 的规则/案例/偏好（profile 保留）", ACTIVE_ROLE);
     Ok(())
 }
 
-/// Add a custom rule to long-term memory.
+/// Add a user-defined rule to the active role (low initial confidence).
 pub fn add_rule(text: &str) -> Result<()> {
-    let memory = LongTermMemory::default_path()?;
-    memory.add_rule(text)?;
-    println!("✅ Rule added: {}", text);
+    let store = RoleStore::new(ACTIVE_ROLE)?;
+    let mut rules = store.load_rules()?;
+    rules.push(Rule {
+        id: format!("rule-user-{}", rules.len() + 1),
+        condition: "用户指定规则".to_string(),
+        action: text.to_string(),
+        confidence: 0.5,
+        source_case_id: None,
+        validated_count: 0,
+        created_at: "manual".to_string(),
+    });
+    store.save_rules(&rules)?;
+    println!("ok 已为角色 {} 添加规则: {}", ACTIVE_ROLE, text);
     Ok(())
 }

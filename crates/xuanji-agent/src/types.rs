@@ -48,3 +48,19 @@ pub struct ToolResult {
     pub result: String,
     pub success: bool,
 }
+
+/// Outcome of an `Agent::run` call: the final text plus real execution statistics.
+///
+/// Carrying counts here (instead of only the final `String`) lets the Role layer
+/// reflect on genuine tool/token usage rather than fabricated zeros.
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionStats {
+    /// The agent's final textual answer.
+    pub text: String,
+    /// Number of tool calls executed during the run.
+    pub tool_calls: u32,
+    /// Total tokens reported by the provider across all LLM calls in the run.
+    pub tokens: u32,
+    /// Whether the run completed without tool errors.
+    pub success: bool,
+}

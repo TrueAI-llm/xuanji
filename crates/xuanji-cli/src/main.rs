@@ -270,12 +270,12 @@ async fn main() -> Result<()> {
     match (cli.prompt, cli.command) {
         // Agent mode: xuanji "task description" -> God Role
         (Some(prompt), None) => {
-            commands::god::run_prompt(&prompt).await?;
+            commands::god::run_prompt(&prompt, &config).await?;
         }
 
         // Chat mode: xuanji chat -> God Role chat
         (None, Some(Commands::Chat)) => {
-            commands::god::run_chat().await?;
+            commands::god::run_chat(&config).await?;
         }
 
         // MCP list
@@ -440,7 +440,7 @@ confirm_risky = true
 
         // Role management
         (None, Some(Commands::Role { action })) => {
-            commands::role::handle_role(&action).await?;
+            commands::role::handle_role(&action, &config).await?;
         }
 
         // No args - show help

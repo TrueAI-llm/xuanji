@@ -1,38 +1,63 @@
 use anyhow::Result;
 use std::io::Write;
-use xuanji_role::{Role, RoleStore, SuggestionKind};
+use std::sync::Arc;
+use xuanji_llm::LlmProvider;
+use xuanji_role::{CycleResult, Role, RoleStore, Stage, SuggestionKind};
+
+use crate::commands::runtime::{build_agent, create_provider_arc, render_markdown, CliAgentFactory};
+use crate::config::XuanjiConfig;
 
 /// God Role name constant.
 pub const GOD_NAME: &str = "god";
 
 /// God Role seed purpose.
-const GOD_PURPOSE: &str =
-    "统筹管理所有 Role，发现协作机会，优化整体效率";
+const GOD_PURPOSE: &str = "统筹管理所有 Role：分解任务、匹配角色、按需 hire/fire，并聚合最终结果";
 
-/// Bootstrap the God Role (idempotent).
-pub fn bootstrap_god() -> Result<Role> {
-    match Role::new(GOD_NAME, GOD_PURPOSE) {
-        Ok(mut role) => {
-            role.activate();
-            role.persist()?;
-            tracing::info!("God Role bootstrapped successfully");
-            Ok(role)
-        }
-        Err(e) => {
-            tracing::warn!("God Role bootstrap skipped: {}", e);
-            let mut role = Role::new(GOD_NAME, GOD_PURPOSE)?;
-            role.activate();
-            Ok(role)
-        }
-    }
+/// Bootstrap the God Role with a real agent + provider + agent factory.
+pub async fn bootstrap_god(config: &XuanjiConfig) -> Result<Role> {
+    let (_, provider_config) = crate::main_fns::get_default_provider(config)?;
+    let provider: Arc<dyn LlmProvider> = create_provider_arc(&provider_config)?;
+
+    let mut god = Role::new(GOD_NAME, GOD_PURPOSE)?;
+
+    // God's own agent: full MCP registry + persona + memory context + chat mode.
+    let persona = god.render_persona();
+    let memory_context = god.render_context();
+    let god_agent = build_agent(&provider, config, &persona, &memory_context, true).await?;
+
+    let factory = Arc::new(CliAgentFactory::new(
+        provider.clone(),
+        config.agent.clone(),
+        config.trigger.workflows_dir.clone(),
+    ));
+
+    god = god
+        .with_agent(god_agent)
+        .with_provider(provider)
+        .with_agent_factory(factory)
+        .with_auto_hire(config.role.auto_hire)
+        .with_fire_stale_days(config.role.fire_stale_days);
+
+    // God is always Expert.
+    let _ = god.set_stage(Stage::Expert);
+    god.activate();
+    god.persist()?;
+    tracing::info!("God Role bootstrapped successfully");
+    Ok(god)
 }
 
 /// Run a single prompt through God Role (orchestrated).
-pub async fn run_prompt(prompt: &str) -> Result<()> {
-    let mut god = bootstrap_god()?;
+pub async fn run_prompt(prompt: &str, config: &XuanjiConfig) -> Result<()> {
+    let mut god = bootstrap_god(config).await?;
 
     match god.run_orchestrated_cycle(prompt).await {
         Ok(result) => {
+            if let Some(answer) = &result.answer {
+                if !answer.trim().is_empty() {
+                    println!();
+                    render_markdown(answer);
+                }
+            }
             print_cycle_result(&result);
         }
         Err(e) => {
@@ -43,16 +68,16 @@ pub async fn run_prompt(prompt: &str) -> Result<()> {
     Ok(())
 }
 
-/// Run interactive chat through God Role.
-pub async fn run_chat() -> Result<()> {
-    println!("\u{2554}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2557}");
-    println!("\u{2551}  xuanji chat \u{2014}\u{2014} God Role          \u{2551}");
-    println!("\u{2551}  输入 /help 查看命令               \u{2551}");
-    println!("\u{2551}  输入 /quit 退出                  \u{2551}");
-    println!("\u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}");
+/// Run interactive chat through God Role (each turn runs an orchestrated cycle).
+pub async fn run_chat(config: &XuanjiConfig) -> Result<()> {
+    println!("╭──────────────────────────────────╮");
+    println!("│  xuanji chat —— God Role          │");
+    println!("│  输入 /help 查看命令               │");
+    println!("│  输入 /quit 退出                  │");
+    println!("╰──────────────────────────────────╯");
     println!();
 
-    let mut god = bootstrap_god()?;
+    let mut god = bootstrap_god(config).await?;
 
     loop {
         let mut input = String::new();
@@ -78,36 +103,7 @@ pub async fn run_chat() -> Result<()> {
                 continue;
             }
             "/roles" => {
-                match RoleStore::list_roles() {
-                    Ok(names) => {
-                        if names.is_empty() {
-                            println!("没有活跃的角色。使用 xuanji role hire 创建。");
-                        } else {
-                            println!("活跃角色:");
-                            for name in &names {
-                                let marker = if name == "god" { " \u{1f451}" } else { "" };
-                                // Try to show profile summary
-                                if let Ok(store) = RoleStore::new(name) {
-                                    if let Ok(Some(profile)) = store.load_profile() {
-                                        println!(
-                                            "  - {}{} | {:?} | {}",
-                                            name, marker,
-                                            profile.evolution_stage,
-                                            profile.seed_purpose
-                                        );
-                                    } else {
-                                        println!("  - {}{}", name, marker);
-                                    }
-                                } else {
-                                    println!("  - {}{}", name, marker);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        println!("无法列出角色: {}", e);
-                    }
-                }
+                print_roles();
                 continue;
             }
             "/teachings" => {
@@ -117,11 +113,7 @@ pub async fn run_chat() -> Result<()> {
                 } else {
                     println!("教学库 ({}):", teachings.len());
                     for t in teachings {
-                        let preview = if t.content.len() > 60 {
-                            &t.content[..60]
-                        } else {
-                            &t.content
-                        };
+                        let preview = if t.content.len() > 60 { &t.content[..60] } else { &t.content };
                         println!(
                             "  [{}] {} - {} (置信度: {:.2})",
                             t.author_role,
@@ -133,31 +125,57 @@ pub async fn run_chat() -> Result<()> {
                 }
                 continue;
             }
-            _ => {
-                match god.run_orchestrated_cycle(&input).await {
-                    Ok(result) => {
-                        println!();
-                        print_cycle_result(&result);
+            _ => match god.run_orchestrated_cycle(&input).await {
+                Ok(result) => {
+                    println!();
+                    if let Some(answer) = &result.answer {
+                        if !answer.trim().is_empty() {
+                            render_markdown(answer);
+                            println!();
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("错误: {}", e);
-                    }
+                    print_cycle_result(&result);
                 }
-            }
+                Err(e) => {
+                    eprintln!("错误: {}", e);
+                }
+            },
         }
     }
 
     Ok(())
 }
 
-/// Pretty-print a CycleResult.
-pub(crate) fn print_cycle_result(result: &xuanji_role::CycleResult) {
-    if let Some(outcome) = &result.outcome {
-        println!("📋 任务: {}", outcome.summary);
+fn print_roles() {
+    match RoleStore::list_roles() {
+        Ok(names) => {
+            if names.is_empty() {
+                println!("没有活跃的角色。使用 xuanji role hire 创建。");
+            } else {
+                println!("活跃角色:");
+                for name in &names {
+                    let marker = if name == "god" { " 👑" } else { "" };
+                    if let Ok(store) = RoleStore::new(name) {
+                        if let Ok(Some(profile)) = store.load_profile() {
+                            println!(
+                                "  - {}{} | {:?} | {}",
+                                name, marker, profile.evolution_stage, profile.seed_purpose
+                            );
+                            continue;
+                        }
+                    }
+                    println!("  - {}{}", name, marker);
+                }
+            }
+        }
+        Err(e) => println!("无法列出角色: {}", e),
     }
+}
 
+/// Pretty-print a CycleResult (dispatch summary + suggestions).
+pub(crate) fn print_cycle_result(result: &CycleResult) {
     if !result.dispatched_to.is_empty() {
-        println!("📦 已派发至:");
+        println!("\n📦 已派发至:");
         for name in &result.dispatched_to {
             println!("   - {}", name);
         }
@@ -186,7 +204,5 @@ pub(crate) fn print_cycle_result(result: &xuanji_role::CycleResult) {
             }
             println!("     理由: {}", s.reason);
         }
-        println!();
-        println!("执行建议的 role hire/fire 命令后，任务将自动继续。");
     }
 }

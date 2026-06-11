@@ -197,6 +197,34 @@ pub struct SubTask {
     pub result: Option<String>,
 }
 
+/// Free-form role context notes (replaces the role-scoped use of LongTermMemory's
+/// `ProjectContext`). A role's "current focus" + accumulated notes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleContext {
+    #[serde(default)]
+    pub notes: String,
+    #[serde(default)]
+    pub focus: String,
+}
+
+impl Default for RoleContext {
+    fn default() -> Self {
+        Self {
+            notes: String::new(),
+            focus: String::new(),
+        }
+    }
+}
+
+/// An orchestration match decision for one sub-task: assign to an existing role,
+/// or signal that a new role should be hired for `purpose`.
+#[derive(Debug, Clone)]
+pub struct Assignment {
+    pub description: String,
+    pub assignee: Option<String>,
+    pub hire: Option<String>,
+}
+
 impl SubTask {
     pub fn new(description: &str) -> Self {
         Self {
@@ -230,6 +258,8 @@ pub enum SuggestionKind {
 #[derive(Debug, Clone)]
 pub struct CycleResult {
     pub outcome: Option<GoalOutcome>,
+    /// The final aggregated answer to show the user (None if nothing was produced).
+    pub answer: Option<String>,
     pub suggestions: Vec<OrchestrationSuggestion>,
     pub dispatched_to: Vec<String>,
 }

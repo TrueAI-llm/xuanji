@@ -13,6 +13,7 @@ impl RoleStore {
     const CASES_FILE: &'static str = "learning/cases.json";
     const PREFERENCES_FILE: &'static str = "learning/preferences.json";
     const PROFILE_FILE: &'static str = "profile.toml";
+    const CONTEXT_FILE: &'static str = "context/context.json";
 
     /// Create or open store for a named role.
     pub fn new(role_name: &str) -> Result<Self, RoleError> {
@@ -21,7 +22,7 @@ impl RoleStore {
         Ok(Self { role_dir })
     }
 
-    /// List all role names on disk.
+    /// List all role names on disk (skips the `.archived` dir and other hidden entries).
     pub fn list_roles() -> Result<Vec<String>, RoleError> {
         let dir = roles_dir();
         if !dir.exists() {
@@ -32,7 +33,10 @@ impl RoleStore {
             let entry = entry?;
             if entry.file_type()?.is_dir() {
                 if let Some(name) = entry.file_name().to_str() {
-                    names.push(name.to_string());
+                    // Skip hidden dirs (notably `.archived`).
+                    if !name.starts_with('.') {
+                        names.push(name.to_string());
+                    }
                 }
             }
         }
@@ -127,6 +131,75 @@ impl RoleStore {
         Ok(prefs)
     }
 
+    // ─── Context (role-scoped free-text notes/focus) ───
+
+    pub fn save_context(&self, ctx: &RoleContext) -> Result<(), RoleError> {
+        let content = serde_json::to_string_pretty(ctx)?;
+        std::fs::write(self.role_dir.join(Self::CONTEXT_FILE), content)?;
+        Ok(())
+    }
+
+    pub fn load_context(&self) -> Result<RoleContext, RoleError> {
+        let path = self.role_dir.join(Self::CONTEXT_FILE);
+        if !path.exists() {
+            return Ok(RoleContext::default());
+        }
+        let content = std::fs::read_to_string(&path)?;
+        if content.trim().is_empty() {
+            return Ok(RoleContext::default());
+        }
+        Ok(serde_json::from_str(&content)?)
+    }
+
+    // ─── Archive (safe fire) ───
+
+    /// Move a role's directory into `~/.xuanji/roles/.archived/<name>/` (overwrites any
+    /// prior archive of the same name). Nothing is deleted — restorable via [`restore`].
+    pub fn archive(role_name: &str) -> Result<(), RoleError> {
+        let src = roles_dir().join(role_name);
+        if !src.exists() {
+            return Ok(()); // idempotent: nothing to archive
+        }
+        let dst = archived_dir().join(role_name);
+        if dst.exists() {
+            std::fs::remove_dir_all(&dst)?;
+        }
+        std::fs::rename(&src, &dst)?;
+        Ok(())
+    }
+
+    /// Restore an archived role back to the active roles directory.
+    pub fn restore(role_name: &str) -> Result<(), RoleError> {
+        let src = archived_dir().join(role_name);
+        if !src.exists() {
+            return Err(RoleError::NotFound(format!(
+                "archived role '{}' not found",
+                role_name
+            )));
+        }
+        let dst = roles_dir().join(role_name);
+        std::fs::rename(&src, &dst)?;
+        Ok(())
+    }
+
+    /// List names of archived roles.
+    pub fn list_archived() -> Result<Vec<String>, RoleError> {
+        let dir = archived_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        Ok(names)
+    }
+
     // ─── Helpers ───
 
     fn ensure_dirs(dir: &PathBuf) -> Result<(), RoleError> {
@@ -134,6 +207,7 @@ impl RoleStore {
         std::fs::create_dir_all(dir.join("learning"))?;
         std::fs::create_dir_all(dir.join("teachings"))?;
         std::fs::create_dir_all(dir.join("sessions"))?;
+        std::fs::create_dir_all(dir.join("context"))?;
         Ok(())
     }
 
@@ -156,6 +230,10 @@ fn roles_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".xuanji")
         .join("roles")
+}
+
+fn archived_dir() -> PathBuf {
+    roles_dir().join(".archived")
 }
 
 #[cfg(test)]

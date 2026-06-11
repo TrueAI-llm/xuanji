@@ -2,12 +2,10 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use xuanji_core::{parse_workflow, DagScheduler, WorkflowInputs};
-use xuanji_llm::openai::OpenAIProvider;
-use xuanji_llm::anthropic::AnthropicProvider;
-use xuanji_llm::{LlmProvider, ProviderConfig, Protocol};
-use xuanji_plugin::process::McpProcess;
+use xuanji_llm::ProviderConfig;
 use xuanji_plugin::types::McpServerConfig;
-use xuanji_plugin::ToolRegistry;
+
+use super::runtime::{create_provider_arc, create_registry};
 
 /// Run a YAML workflow.
 pub async fn run_workflow(
@@ -26,7 +24,7 @@ pub async fn run_workflow(
     let inputs = parse_inputs(input_pairs, &workflow.inputs);
 
     // 3. Create provider and registry
-    let provider = create_provider(provider_config)?;
+    let provider = create_provider_arc(provider_config)?;
     let mut registry = create_registry(mcp_servers).await?;
 
     // 4. Register system tools
@@ -74,41 +72,4 @@ fn parse_inputs(
     }
 
     inputs
-}
-
-fn create_provider(config: &ProviderConfig) -> Result<Arc<dyn LlmProvider>> {
-    let mut config = config.clone();
-    if config.api_key.starts_with("${") && config.api_key.ends_with('}') {
-        let var_name = &config.api_key[2..config.api_key.len() - 1];
-        config.api_key = std::env::var(var_name).unwrap_or_default();
-    }
-
-    match config.protocol {
-        Protocol::OpenAI => Ok(Arc::new(OpenAIProvider::new(config))),
-        Protocol::Anthropic => Ok(Arc::new(AnthropicProvider::new(config))),
-        Protocol::Gemini => anyhow::bail!("Gemini protocol not yet implemented"),
-    }
-}
-
-async fn create_registry(mcp_servers: &[McpServerConfig]) -> Result<ToolRegistry> {
-    let mut registry = ToolRegistry::new();
-
-    for server_config in mcp_servers {
-        let process = McpProcess::new(server_config.clone());
-        let mut client = xuanji_plugin::McpClient::new(process);
-        match client.initialize().await {
-            Ok(()) => {
-                registry.register_server(client).await?;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to start MCP server '{}': {}. Skipping.",
-                    server_config.name,
-                    e
-                );
-            }
-        }
-    }
-
-    Ok(registry)
 }

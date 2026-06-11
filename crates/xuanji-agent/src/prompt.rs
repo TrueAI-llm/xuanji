@@ -4,15 +4,26 @@ use xuanji_memory::working::WorkingMemory;
 
 /// Build the system prompt with tools, working memory, optional long-term memory context,
 /// and optional bus messages from other agents.
+///
+/// If `persona` is `Some`, it is injected at the very top — this is how a Role's
+/// specialized identity (and the God Role identity) overrides the generic default persona.
 pub fn build_system_prompt(
     tools: &[ToolSchema],
     working_memory: Option<&WorkingMemory>,
     memory_context: Option<&str>,
     text_tool_mode: bool,
     bus_messages: Option<&[KnowledgeMessage]>,
+    persona: Option<&str>,
 ) -> String {
-    let mut prompt = String::from(
-        r#"你是 xuanji，一个自动化任务执行助手。
+    let mut prompt = String::new();
+
+    if let Some(p) = persona {
+        // Role-supplied persona replaces the generic default identity.
+        prompt.push_str(p);
+        prompt.push_str("\n\n");
+    } else {
+        prompt.push_str(
+            r#"你是 xuanji，一个自动化任务执行助手。
 
 ## 你的工作方式
 1. 理解用户目标，将其拆解为可执行的子任务
@@ -26,7 +37,8 @@ pub fn build_system_prompt(
 - 如果信息不足以完成任务，向用户提问
 - 完成后给出简洁的执行总结
 "#,
-    );
+        );
+    }
 
     if !tools.is_empty() {
         if text_tool_mode {

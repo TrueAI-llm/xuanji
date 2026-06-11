@@ -6,15 +6,11 @@ use xuanji_budget::BudgetController;
 use xuanji_bus::state::SharedState;
 use xuanji_bus::KnowledgeBus;
 use xuanji_core::register_agent_delegate;
-use xuanji_llm::anthropic::AnthropicProvider;
-use xuanji_llm::openai::OpenAIProvider;
-use xuanji_llm::{LlmProvider, ProviderConfig, Protocol};
+use xuanji_llm::{ArcProvider, LlmProvider, ProviderConfig};
 use xuanji_memory::LongTermMemory;
-use xuanji_plugin::process::McpProcess;
 use xuanji_plugin::types::McpServerConfig;
-use xuanji_plugin::{McpClient, ToolRegistry};
 
-use super::agent::render_markdown;
+use super::runtime::{create_provider_arc, create_registry, render_markdown};
 
 /// Run a multi-agent swarm task.
 pub async fn run_swarm(
@@ -33,9 +29,8 @@ pub async fn run_swarm(
     let budget = Arc::new(BudgetController::new(budget_config.clone()));
     let shared_state = Arc::new(SharedState::new(bus.clone()));
 
-    // 2. Create provider + registry
-    let provider_box = create_provider(provider_config)?;
-    let provider_arc: Arc<dyn xuanji_llm::LlmProvider> = Arc::from(provider_box);
+    // 2. Create shared provider + registry
+    let provider_arc = create_provider_arc(provider_config)?;
     let mut registry = create_registry(mcp_servers).await?;
 
     // 3. Register agent.delegate system tool
@@ -50,9 +45,8 @@ pub async fn run_swarm(
         "coordinator".to_string(),
     );
 
-    // 4. Create coordinator agent
-    // Re-create a Box provider for the coordinator agent
-    let coordinator_provider = create_provider(provider_config)?;
+    // 4. Create coordinator agent (share the provider via ArcProvider)
+    let coordinator_provider: Box<dyn LlmProvider> = Box::new(ArcProvider(provider_arc.clone()));
     let mut main_agent = Agent::new(coordinator_provider, registry, agent_config.clone())
         .with_name("coordinator")
         .with_bus(bus.clone())
@@ -69,7 +63,7 @@ pub async fn run_swarm(
     match main_agent.run(task.to_string()).await {
         Ok(result) => {
             println!();
-            render_markdown(&result);
+            render_markdown(&result.text);
             println!();
         }
         Err(e) => println!("\n❌ 任务失败: {}\n", e),
@@ -103,49 +97,4 @@ pub async fn show_budget(budget_config: &xuanji_budget::BudgetConfig) -> Result<
     println!("最大递归深度: {}", budget_config.max_depth);
 
     Ok(())
-}
-
-fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>> {
-    let mut config = config.clone();
-    if config.api_key.starts_with("${") && config.api_key.ends_with('}') {
-        let var_name = &config.api_key[2..config.api_key.len() - 1];
-        config.api_key = std::env::var(var_name).unwrap_or_default();
-    }
-
-    match config.protocol {
-        Protocol::OpenAI => {
-            let provider = OpenAIProvider::new(config);
-            Ok(Box::new(provider))
-        }
-        Protocol::Anthropic => {
-            let provider = AnthropicProvider::new(config);
-            Ok(Box::new(provider))
-        }
-        Protocol::Gemini => {
-            anyhow::bail!("Gemini protocol not yet implemented")
-        }
-    }
-}
-
-async fn create_registry(mcp_servers: &[McpServerConfig]) -> Result<ToolRegistry> {
-    let mut registry = ToolRegistry::new();
-
-    for server_config in mcp_servers {
-        let process = McpProcess::new(server_config.clone());
-        let mut client = McpClient::new(process);
-        match client.initialize().await {
-            Ok(()) => {
-                registry.register_server(client).await?;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to start MCP server '{}': {}. Skipping.",
-                    server_config.name,
-                    e
-                );
-            }
-        }
-    }
-
-    Ok(registry)
 }

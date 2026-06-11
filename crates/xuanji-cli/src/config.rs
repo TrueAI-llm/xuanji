@@ -16,6 +16,34 @@ fn default_llm_config() -> LlmConfig {
     }
 }
 
+/// Role-system CLI tuning (all fields have safe defaults).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleCliConfig {
+    /// When true, God Role auto-creates (hires) specialist roles on skill gaps.
+    /// When false, gaps only produce a printed hire suggestion.
+    #[serde(default = "default_auto_hire")]
+    pub auto_hire: bool,
+    /// A `Seed`-stage role with zero cases older than this many days is auto-archived.
+    #[serde(default = "default_fire_stale_days")]
+    pub fire_stale_days: i64,
+}
+
+fn default_auto_hire() -> bool {
+    true
+}
+fn default_fire_stale_days() -> i64 {
+    7
+}
+
+impl Default for RoleCliConfig {
+    fn default() -> Self {
+        Self {
+            auto_hire: default_auto_hire(),
+            fire_stale_days: default_fire_stale_days(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct XuanjiConfig {
     #[serde(default = "default_llm_config")]
@@ -30,6 +58,8 @@ pub struct XuanjiConfig {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub budget: BudgetConfig,
+    #[serde(default)]
+    pub role: RoleCliConfig,
 }
 
 impl Default for XuanjiConfig {
@@ -44,6 +74,7 @@ impl Default for XuanjiConfig {
             trigger: TriggerConfig::default(),
             memory: MemoryConfig::default(),
             budget: BudgetConfig::default(),
+            role: RoleCliConfig::default(),
         }
     }
 }
@@ -151,6 +182,7 @@ impl XuanjiConfig {
             trigger: self.trigger.clone(),
             memory: self.memory.clone(),
             budget: self.budget.clone(),
+            role: self.role.clone(),
         }
     }
 
@@ -173,6 +205,7 @@ impl XuanjiConfig {
         self.trigger = other.trigger;
         self.memory = other.memory;
         self.budget = other.budget;
+        self.role = other.role;
         self
     }
 }

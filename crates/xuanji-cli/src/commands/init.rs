@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-use crate::config::XuanjiConfig;
+use crate::config::{RoleCliConfig, XuanjiConfig};
 use xuanji_agent::types::AgentConfig;
 use xuanji_budget::BudgetConfig;
 use xuanji_llm::config::{LlmConfig, ProviderConfig};
@@ -119,6 +119,7 @@ pub fn run_init(local: bool) -> Result<()> {
         trigger: TriggerConfig::default(),
         memory: MemoryConfig::default(),
         budget: BudgetConfig::default(),
+        role: RoleCliConfig::default(),
     };
 
     save_config(&config, local)

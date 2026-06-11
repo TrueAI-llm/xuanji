@@ -1,35 +1,14 @@
 use std::sync::Arc;
-use async_trait::async_trait;
 use xuanji_agent::types::AgentConfig;
 use xuanji_agent::Agent;
 use xuanji_budget::BudgetController;
 use xuanji_bus::state::SharedState;
 use xuanji_bus::KnowledgeBus;
-use xuanji_llm::config::ProviderConfig;
-use xuanji_llm::error::LlmError;
-use xuanji_llm::types::{LlmResponse, Message, ToolSchema};
+use xuanji_llm::types::Message;
 use xuanji_llm::LlmProvider;
 use xuanji_plugin::ToolRegistry;
 
 use crate::parser::parse_workflow;
-
-/// Wrapper to use `Arc<dyn LlmProvider>` as `Box<dyn LlmProvider>`.
-struct ArcProvider(Arc<dyn LlmProvider>);
-
-#[async_trait]
-impl LlmProvider for ArcProvider {
-    async fn complete(
-        &self,
-        messages: &[Message],
-        tools: &[ToolSchema],
-    ) -> Result<LlmResponse, LlmError> {
-        self.0.complete(messages, tools).await
-    }
-
-    fn config(&self) -> &ProviderConfig {
-        self.0.config()
-    }
-}
 
 /// Schema for llm.ask tool
 pub const LLM_ASK_SCHEMA: &str = r#"{
@@ -251,8 +230,8 @@ async fn execute_agent_delegate(
     let sub_registry = ToolRegistry::new();
 
     // Create the sub-agent
-    // Wrap Arc in a newtype that implements LlmProvider via Arc delegation
-    let provider_box: Box<dyn LlmProvider> = Box::new(ArcProvider(provider));
+    // Wrap the shared Arc<dyn LlmProvider> so it can be owned as Box<dyn LlmProvider>.
+    let provider_box: Box<dyn LlmProvider> = Box::new(xuanji_llm::ArcProvider(provider));
     let mut sub_agent = Agent::new(
         provider_box,
         sub_registry,
@@ -268,7 +247,7 @@ async fn execute_agent_delegate(
         Ok(result) => {
             tracing::info!("Sub-agent '{}' completed successfully", full_name);
             Ok(xuanji_plugin::client::McpToolResult {
-                content: serde_json::json!([{ "type": "text", "text": result }]),
+                content: serde_json::json!([{ "type": "text", "text": result.text }]),
                 is_error: false,
             })
         }

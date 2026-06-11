@@ -1,7 +1,7 @@
 use crate::error::AgentError;
 use crate::prompt::build_system_prompt;
 use crate::risk::RiskChecker;
-use crate::types::{AgentConfig, ToolResult};
+use crate::types::{AgentConfig, ExecutionStats, ToolResult};
 use xuanji_budget::BudgetController;
 use xuanji_bus::state::SharedState;
 use xuanji_bus::{KnowledgeBus, KnowledgeMessage};
@@ -34,6 +34,12 @@ pub struct Agent {
     shared_state: Option<Arc<SharedState>>,
     /// Recursion depth (0 = top-level agent).
     depth: u32,
+    /// Optional role persona injected at the top of the system prompt.
+    /// When set, replaces the generic "你是 xuanji…" identity.
+    persona: Option<String>,
+    /// Optional pre-rendered memory context (e.g., a Role's accumulated knowledge).
+    /// When set, used instead of self-built LongTermMemory.
+    memory_context: Option<String>,
 }
 
 /// Parsed text-based tool call from LLM output.
@@ -142,6 +148,8 @@ impl Agent {
             budget: None,
             shared_state: None,
             depth: 0,
+            persona: None,
+            memory_context: None,
         }
     }
 
@@ -188,13 +196,30 @@ impl Agent {
         }
     }
 
-    /// Run a single-shot agent task.
-    pub async fn run(&mut self, user_input: String) -> Result<String, AgentError> {
+    /// Inject a role persona that replaces the default system-prompt identity.
+    pub fn with_persona(mut self, persona: &str) -> Self {
+        self.persona = Some(persona.to_string());
+        self
+    }
+
+    /// Inject a pre-rendered memory-context string (e.g. a Role's knowledge).
+    /// When set, takes precedence over self-built LongTermMemory.
+    pub fn with_memory_context(mut self, context: String) -> Self {
+        self.memory_context = Some(context);
+        self
+    }
+
+    /// Run a single-shot agent task. Returns the final text plus execution statistics.
+    pub async fn run(&mut self, user_input: String) -> Result<ExecutionStats, AgentError> {
         let tools = self.registry.all_tool_schemas();
         let text_tool_mode = self.config.text_tool_mode;
 
-        // Load long-term memory context first (before any mutable borrows)
-        let memory_context = self.load_memory_context();
+        // Use injected memory context if present (Role path); otherwise fall back to
+        // self-built LongTermMemory (legacy/project path).
+        let memory_context = self.memory_context.clone().or_else(|| self.load_memory_context());
+
+        let mut tool_calls_total: u32 = 0;
+        let mut tokens_total: u32 = 0;
 
         // Take chat_memory out of self to avoid borrow conflicts.
         // We'll put it back at the end of this method.
@@ -207,7 +232,7 @@ impl Agent {
         let mut working = WorkingMemory::new();
         working.goal = Some(user_input.clone());
 
-        let system_prompt = build_system_prompt(&tools, Some(&working), memory_context.as_deref(), text_tool_mode, None);
+        let system_prompt = build_system_prompt(&tools, Some(&working), memory_context.as_deref(), text_tool_mode, None, self.persona.as_deref());
         short_term.push(Message::System {
             content: system_prompt,
         });
@@ -242,6 +267,7 @@ impl Agent {
             let system_prompt = build_system_prompt(
                 &tools, Some(&working), memory_context.as_deref(), text_tool_mode,
                 if bus_messages.is_empty() { None } else { Some(&bus_messages) },
+                self.persona.as_deref(),
             );
             let messages = Self::prepare_messages(&short_term, &system_prompt);
 
@@ -254,6 +280,7 @@ impl Agent {
 
             // Report token usage to budget controller
             let usage = response.usage();
+            tokens_total += usage.total_tokens;
             if let Some(budget) = &self.budget {
                 if usage.total_tokens > 0 {
                     budget.report(&self.agent_name, usage.total_tokens).await;
@@ -280,6 +307,7 @@ impl Agent {
                         arguments: parsed.arguments,
                     };
                     let result = self.execute_tool(&fake_call).await;
+                    tool_calls_total += 1;
 
                     // Update working memory and publish to bus
                     if result.success {
@@ -332,6 +360,7 @@ impl Agent {
                             let result = self.execute_tool(call).await;
                             results.push(result);
                         }
+                        tool_calls_total += calls.len() as u32;
 
                         // Update working memory with results and publish to bus
                         for result in &results {
@@ -382,7 +411,12 @@ impl Agent {
         // Restore chat memory (was taken at the start of run())
         self.chat_memory = Some(short_term);
 
-        Ok(final_result)
+        Ok(ExecutionStats {
+            text: final_result,
+            tool_calls: tool_calls_total,
+            tokens: tokens_total,
+            success,
+        })
     }
 
     /// Poll the bus for new messages (non-blocking).

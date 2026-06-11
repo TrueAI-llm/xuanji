@@ -11,5 +11,5 @@ pub use config::{LlmConfig, ProviderConfig};
 pub use error::LlmError;
 pub use openai::OpenAIProvider;
 pub use protocol::Protocol;
-pub use provider::LlmProvider;
+pub use provider::{ArcProvider, LlmProvider};
 pub use types::{LlmResponse, Message, ToolCall, ToolSchema, Usage};
